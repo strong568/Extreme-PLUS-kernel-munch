@@ -51,6 +51,7 @@ jobs:
           cp patches/* kernel/
           chmod +x kernel/build_kernel.sh
 
+      # Fix Swap Memory
       - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
         run: |
           echo "[*] Checking current RAM..."
@@ -73,6 +74,20 @@ jobs:
           else
             ./build_kernel.sh munch ksu "$TARGET_VAR"
           fi
+
+          BUILD_DATE=$(TZ='Asia/Ho_Chi_Minh' date +'%Y%m%d')
+
+          for file in *munch*.zip; do
+            [ -e "$file" ] || continue
+            BASE_NAME="${file%.zip}"
+            if [ "${{ inputs.build_ksu }}" == "true" ]; then
+              NEW_NAME="${BASE_NAME}-SUSFS-${BUILD_DATE}.zip"
+            else
+              NEW_NAME="${BASE_NAME}-${BUILD_DATE}.zip"
+            fi
+            mv "$file" "$NEW_NAME"
+            echo "Renamed: $file -> $NEW_NAME"
+          done
           
           echo "✅ Built ZIP files:"
           ls -lh *munch*.zip
@@ -80,12 +95,24 @@ jobs:
       - name: "📝 Generate Release Notes & Fetch Managers"
         id: release_info
         run: |
-          TAG_NAME="v${{ github.run_number }}-$(date +'%Y%m%d')"
+          BUILD_DATE=$(TZ='Asia/Ho_Chi_Minh' date +'%Y%m%d')
+          TAG_NAME="v${{ github.run_number }}-${BUILD_DATE}"
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-          # Truy vấn link release manager mới nhất từ GitHub API
+          # 1. Lấy link Release ReSukiSU mới nhất
           RESUKISU_URL=$(curl -s "https://api.github.com/repos/ShirkNeko/ReSukiSU/releases/latest" | jq -r '.html_url // "https://github.com/ShirkNeko/ReSukiSU/releases"')
-          SUKISU_URL=$(curl -s "https://api.github.com/repos/tiann/KernelSU/releases/latest" | jq -r '.html_url // "https://github.com/tiann/KernelSU/releases"')
+
+          # 2. Lấy link Run Action 'Build Manager' thành công mới nhất của SukiSU-Ultra
+          API_RES=$(curl -s "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=success&branch=main")
+          SUKISU_ACTION_URL=$(echo "$API_RES" | jq -r '[.workflow_runs[] | select(.name | test("Build Manager"; "i"))][0].html_url // empty')
+          SUKISU_RUN_NUM=$(echo "$API_RES" | jq -r '[.workflow_runs[] | select(.name | test("Build Manager"; "i"))][0].run_number // empty')
+
+          if [ -z "$SUKISU_ACTION_URL" ]; then
+            SUKISU_ACTION_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra/actions"
+            SUKISU_TITLE="SukiSU-Ultra CI Actions"
+          else
+            SUKISU_TITLE="SukiSU-Ultra Build Manager #${SUKISU_RUN_NUM}"
+          fi
 
           cat << 'EOF' > release_body.md
           ## 🔥 EXTREME++ Kernel Release #${{ github.run_number }}
@@ -95,6 +122,7 @@ jobs:
           * **Toolchain:** ZyC-Clang 16.0.6 + LLD
           * **Root Option:** ReSukiSU Non-GKI 4.19 + SuSFS (Enabled: ${{ inputs.build_ksu }})
           * **Variant:** ${{ inputs.variant }}
+          * **Build Date:** $(TZ='Asia/Ho_Chi_Minh' date +'%d/%m/%Y')
 
           ---
 
@@ -111,8 +139,8 @@ jobs:
           ### 📱 Recommended Root Managers (As of Build Date)
           EOF
 
-          echo "* **ReSukiSU Manager:** [Tải bản mới nhất tại đây]($RESUKISU_URL)" >> release_body.md
-          echo "* **SukiSU / KernelSU Manager:** [Tải bản tương thích tại đây]($SUKISU_URL)" >> release_body.md
+          echo "* **ReSukiSU Manager (Release):** [Tải bản mới nhất tại đây]($RESUKISU_URL)" >> release_body.md
+          echo "* **SukiSU Manager (CI Action mới nhất):** [${SUKISU_TITLE}]($SUKISU_ACTION_URL)" >> release_body.md
 
       - name: "🚀 Publish to GitHub Releases"
         uses: softprops/action-gh-release@v2
