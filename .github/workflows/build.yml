@@ -27,20 +27,13 @@ jobs:
     timeout-minutes: 180 
 
     steps:
-      - name: "📢 Telegram: Build Started"
-        continue-on-error: true
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="🚀 <b>EXTREME++ Build Started!</b>%0A📱 Device: POCO F4 (munch)%0A⚙️ Root (RKSU): ${{ inputs.build_ksu }}%0A⚡ Variant: ${{ inputs.variant }}" -d parse_mode="HTML" || true
-
       - name: "📦 Checkout config repo"
         uses: actions/checkout@v4
 
       - name: "🛠️ Install build dependencies"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip jq
 
       - name: "⚡ Setup ZyC-Clang 16"
         run: |
@@ -58,7 +51,6 @@ jobs:
           cp patches/* kernel/
           chmod +x kernel/build_kernel.sh
 
-      # 🔥 FIX 2: THE MASTER ZRAM/SWAP HACK (Fixed for GitHub OverlayFS)
       - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
         run: |
           echo "[*] Checking current RAM..."
@@ -85,32 +77,51 @@ jobs:
           echo "✅ Built ZIP files:"
           ls -lh *munch*.zip
 
-      - name: "📢 Telegram: Official Release Broadcast"
-        if: success()
+      - name: "📝 Generate Release Notes & Fetch Managers"
+        id: release_info
         run: |
-          MSG="🔥 <b>EXTREME++ Official Release #${{ github.run_number }}</b>%0A%0A"
-          MSG="${MSG}📱 <b>Device:</b> POCO F4 (munch)%0A"
-          MSG="${MSG}⚡ <b>Target ROM:</b> HyperOS / MIUI Android 13–17%0A"
-          MSG="${MSG}🛠️ <b>Toolchain:</b> ZyC-Clang 16.0.6 + LLD%0A"
-          MSG="${MSG}🛡️ <b>Root:</b> ReSukiSU Non-GKI 4.19 + SuSFS%0A%0A"
-          MSG="${MSG}✨ <b>Key Features:</b>%0A"
-          MSG="${MSG}• <b>Dual Variants:</b> 3.2GHz Benchmark & 2.8GHz Cool Gaming%0A"
-          MSG="${MSG}• <b>Network:</b> TCP BBR Congestion Control (Low Ping in BGMI/COD)%0A"
-          MSG="${MSG}• <b>GPU:</b> FakeDreamer 150MHz - 670MHz UV & msm-adreno-tz%0A"
-          MSG="${MSG}• <b>Storage:</b> Zero-Overhead Block I/O Stats Disabled%0A"
-          MSG="${MSG}• <b>Memory:</b> Smart LMK Sniper Method & App Protection%0A"
-          MSG="${MSG}• <b>Governor:</b> 100% Safe Schedutil Boot + EXTREME+ Module%0A%0A"
-          MSG="${MSG}📦 <i>Uploading flashable ZIP packages below...</i>"
+          TAG_NAME="v${{ github.run_number }}-$(date +'%Y%m%d')"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="$MSG" \
-            -d parse_mode="HTML" || true
+          # Truy vấn link release manager mới nhất từ GitHub API
+          RESUKISU_URL=$(curl -s "https://api.github.com/repos/ShirkNeko/ReSukiSU/releases/latest" | jq -r '.html_url // "https://github.com/ShirkNeko/ReSukiSU/releases"')
+          SUKISU_URL=$(curl -s "https://api.github.com/repos/tiann/KernelSU/releases/latest" | jq -r '.html_url // "https://github.com/tiann/KernelSU/releases"')
 
-          for z in $(find "$GITHUB_WORKSPACE/kernel" -maxdepth 1 -name "*munch*.zip"); do
-            echo "Uploading $z to Telegram..."
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-              -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-              -F document=@"$z" \
-              -F caption="📦 $(basename "$z")" || true
-          done
+          cat << 'EOF' > release_body.md
+          ## 🔥 EXTREME++ Kernel Release #${{ github.run_number }}
+
+          * **Device:** POCO F4 (munch)
+          * **Target ROM:** HyperOS / MIUI (Android 13–17)
+          * **Toolchain:** ZyC-Clang 16.0.6 + LLD
+          * **Root Option:** ReSukiSU Non-GKI 4.19 + SuSFS (Enabled: ${{ inputs.build_ksu }})
+          * **Variant:** ${{ inputs.variant }}
+
+          ---
+
+          ### ✨ Key Features
+          * **Dual Variants:** 3.2GHz Benchmark & 2.8GHz Cool Gaming
+          * **Network:** TCP BBR Congestion Control (Low Ping in BGMI/COD)
+          * **GPU:** FakeDreamer 150MHz - 670MHz UV & msm-adreno-tz
+          * **Storage:** Zero-Overhead Block I/O Stats Disabled
+          * **Memory:** Smart LMK Sniper Method & App Protection
+          * **Governor:** 100% Safe Schedutil Boot + EXTREME+ Module
+
+          ---
+
+          ### 📱 Recommended Root Managers (As of Build Date)
+          EOF
+
+          echo "* **ReSukiSU Manager:** [Tải bản mới nhất tại đây]($RESUKISU_URL)" >> release_body.md
+          echo "* **SukiSU / KernelSU Manager:** [Tải bản tương thích tại đây]($SUKISU_URL)" >> release_body.md
+
+      - name: "🚀 Publish to GitHub Releases"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag_name }}
+          name: "EXTREME++ Kernel Release #${{ github.run_number }}"
+          body_path: release_body.md
+          files: kernel/*munch*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
