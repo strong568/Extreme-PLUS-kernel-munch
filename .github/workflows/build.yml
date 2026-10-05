@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       build_ksu:
-        description: 'Build with Root (RKSU)?'
+        description: 'Build with Root (RKSU:ReSukiSU, SukiSU)?'
         required: true
         type: boolean
         default: true
