@@ -114,7 +114,7 @@ jobs:
             SUKISU_TITLE="SukiSU-Ultra Build Manager #${SUKISU_RUN_NUM}"
           fi
 
-          cat << 'EOF' > release_body.md
+          cat << EOF > release_body.md
           ## 🔥 EXTREME++ Kernel Release #${{ github.run_number }}
 
           * **Device:** POCO F4 (munch)
@@ -122,7 +122,7 @@ jobs:
           * **Toolchain:** ZyC-Clang 16.0.6 + LLD
           * **Root Option:** ReSukiSU Non-GKI 4.19 + SuSFS (Enabled: ${{ inputs.build_ksu }})
           * **Variant:** ${{ inputs.variant }}
-          * **Build Date:** $(TZ='Asia/Ho_Chi_Minh' date +'%d/%m/%Y')
+          * **Build Date:** ${BUILD_DATE_STR}
 
           ---
 
