@@ -100,7 +100,7 @@ jobs:
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
           # 1. Lấy link Release ReSukiSU mới nhất
-          RESUKISU_URL=$(curl -s "https://api.github.com/repos/ShirkNeko/ReSukiSU/releases/latest" | jq -r '.html_url // "https://github.com/ShirkNeko/ReSukiSU/releases"')
+          RESUKISU_URL=$(curl -s "https://api.github.com/repos/ShirkNeko/ReSukiSU/releases/latest" | jq -r '.html_url // "https://github.com/Baka-SU/BakaSU/releases"')
 
           # 2. Lấy link Run Action 'Build Manager' thành công mới nhất của SukiSU-Ultra
           API_RES=$(curl -s "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=success&branch=main")
