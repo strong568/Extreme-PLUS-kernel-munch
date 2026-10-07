@@ -1,30 +1,54 @@
-name: 📲 Send ReSukiSU Manager
+name: 📲 Publish RKSU Manager to Release & Artifacts
 
 on:
-  workflow_dispatch: # Manual trigger button
+  workflow_dispatch: # Kích hoạt thủ công
+
+permissions:
+  contents: write # Cần quyền write để tạo GitHub Release
 
 jobs:
-  push_apk_telegram:
-    name: "Fetch & Send Manager"
+  publish_manager:
+    name: "Fetch, Archive & Release Manager"
     runs-on: ubuntu-latest
 
     steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
       - name: "🔍 Fetch Latest Manager APK"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[*] Contacting GitHub API for APK..."
-          # Fetching from rsuntk as ReSukiSU doesn't host compiled APKs
-          API_URL="https://api.github.com/repos/rsuntk/KernelSU/releases"
-          
-          # Bulletproof extraction using grep
-          APK_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" $API_URL | grep "browser_download_url" | grep -i "\.apk" | cut -d '"' -f 4 | head -n 1)
-          VERSION_TAG=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" $API_URL | grep '"tag_name":' | cut -d '"' -f 4 | head -n 1)
-          
+          echo "[*] Contacting GitHub API for Manager APK..."
+          REPOS=(
+            "rsuntk/KernelSU"
+            "tiann/KernelSU"
+            "ReSukiSU/ReSukiSU"
+          )
+          APK_URL=""
+          VERSION_TAG=""
+          for repo in "${REPOS[@]}"; do
+            echo "[*] Checking release source: $repo"
+            API_URL="https://api.github.com/repos/${repo}/releases"
+            DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
+            FOUND_URL=$(echo "$DATA" | grep "browser_download_url" | grep -i "\.apk" | cut -d '"' -f 4 | head -n 1)
+            if [ -n "$FOUND_URL" ]; then
+              APK_URL="$FOUND_URL"
+              VERSION_TAG=$(echo "$DATA" | grep '"tag_name":' | cut -d '"' -f 4 | head -n 1)
+              echo "✅ Located APK in $repo: tag $VERSION_TAG ->$APK_URL"
+              break
+            fi
+          done
+
+          if [ -z "$APK_URL" ]; then
+            echo "❌ Failed to locate APK in any release repository!"
+            exit 1
+          fi
+
           echo "Downloading version: $VERSION_TAG"
-          FILE_NAME="ReSukiSU_Manager_${VERSION_TAG}.apk"
+          FILE_NAME="RKSU_Manager_${VERSION_TAG}.apk"
           
-          wget -q -O "$FILE_NAME" "$APK_URL"
+          curl -fLSs -o "$FILE_NAME" "$APK_URL" || wget -q -O "$FILE_NAME" "$APK_URL"
           
           # Check if file exists and is not empty
           if [ -s "$FILE_NAME" ]; then
@@ -36,21 +60,26 @@ jobs:
             exit 1
           fi
 
-      - name: "🚀 Send APK to Telegram"
-        run: |
-          CAPTION="🔥 <b>EXTREME++ KernelSU Manager</b>
+      - name: "📦 Upload APK as Action Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_FILE }}
+          path: ${{ env.APK_FILE }}
+          retention-days: 7
+
+      - name: "🚀 Publish to GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: "RKSU Manager ${{ env.VERSION_TAG }}"
+          body: |
+            ### 🔥 EXTREME++ RKSU Manager
+            - **Version:** `${{ env.VERSION_TAG }}`
+            - **Type:** RKSU (Rissu KernelSU + SuSFS)
+            - **Device:** POCO F4 (munch)
+          files: ${{ env.APK_FILE }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
-          📦 <b>Version:</b> <code>${{ env.VERSION_TAG }}</code>
-          ⚙️ <b>Type:</b> ReSukiSU (Non-GKI 4.19 + SuSFS)
-          📱 <b>Device:</b> POCO F4 (munch)
-          
-          ⬇️ <i>Install this specific manager to control your root access. This is perfectly synced with your EXTREME++ kernel for zero detection!</i>"
-          
-          echo "[*] Uploading APK to Telegram..."
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-            -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -F document="@${{ env.APK_FILE }}" \
-            -F caption="$CAPTION" \
-            -F parse_mode="HTML"
-          
-          echo "[+] Successfully pushed to Telegram!"
