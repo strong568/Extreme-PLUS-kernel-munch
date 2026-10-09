@@ -21,39 +21,44 @@ jobs:
         run: |
           echo "[*] Contacting GitHub API for Manager APK..."
           REPOS=(
-            "rsuntk/KernelSU"
-            "tiann/KernelSU"
-            "ReSukiSU/ReSukiSU"
             "backslashxx/KernelSU"
+            "rsuntk/KernelSU"
+            "ReSukiSU/ReSukiSU"
+            "tiann/KernelSU"
             "KOWX712/KernelSU"
           )
+
           APK_URL=""
           VERSION_TAG=""
           FOUND_OWNER=""
 
           for repo in "${REPOS[@]}"; do
-            echo "[*] Checking release source: $repo"
-            API_URL="https://api.github.com/repos/${repo}/releases"
+            echo "[*] Checking latest release in: $repo"
+            API_URL="https://api.github.com/repos/${repo}/releases/latest"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
-            FOUND_URL=$(echo "$DATA" | grep "browser_download_url" | grep -i "\.apk" | cut -d '"' -f 4 | head -n 1)
-            if [ -n "$FOUND_URL" ]; then
-              APK_URL="$FOUND_URL"
-              VERSION_TAG=$(echo "$DATA" | grep '"tag_name":' | cut -d '"' -f 4 | head -n 1)
+
+            # Trích xuất tag_name và browser_download_url của file .apk
+            DOWNLOAD_URL=$(echo "$DATA" | jq -r '.assets[]? | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+            TAG=$(echo "$DATA" | jq -r '.tag_name // empty')
+
+            if [ -n "$DOWNLOAD_URL" ] && [ "$DOWNLOAD_URL" != "null" ]; then
+              APK_URL="$DOWNLOAD_URL"
+              VERSION_TAG="$TAG"
               FOUND_OWNER="${repo%%/*}"
-              echo "✅ Located APK in $repo: tag $VERSION_TAG ->$APK_URL"
+              echo "✅ Found APK in $repo ($VERSION_TAG): $APK_URL"
               break
             fi
           done
 
           if [ -z "$APK_URL" ]; then
-            echo "❌ Failed to locate APK in any release repository!"
+            echo "❌ Failed to locate APK in any repository!"
             exit 1
           fi
 
-          echo "Downloading version: $VERSION_TAG from$FOUND_OWNER"
           FILE_NAME="${FOUND_OWNER}_Manager_${VERSION_TAG}.apk"
-          
+          echo "[*] Downloading to $FILE_NAME..."
           curl -fLSs -o "$FILE_NAME" "$APK_URL" || wget -q -O "$FILE_NAME" "$APK_URL"
+
           
           # Check if file exists and is not empty
           if [ -s "$FILE_NAME" ]; then
