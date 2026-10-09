@@ -102,13 +102,12 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/KOWX712/KernelSU/actions/runs/${KOWX_RUN_ID}/artifacts")
 
+            # Chỉ lấy DUY NHẤT 1 artifact đầu tiên khớp điều kiện (dùng first)
             ARTIFACT_DOWNLOAD_URL=$(echo "$ARTIFACTS_DATA" | jq -r '
-              (.artifacts[] | select(.name | test("apk|manager"; "i")) | .archive_download_url) //
-              .artifacts[0].archive_download_url // empty
+              [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .archive_download_url // empty
             ')
             ARTIFACT_NAME=$(echo "$ARTIFACTS_DATA" | jq -r '
-              (.artifacts[] | select(.name | test("apk|manager"; "i")) | .name) //
-              .artifacts[0].name // empty
+              [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .name // empty
             ')
 
             if [ -n "$ARTIFACT_DOWNLOAD_URL" ]; then
@@ -123,6 +122,7 @@ jobs:
                 mkdir -p kowx_extracted
                 unzip -q -o "kowx_temp.zip" -d kowx_extracted/
                 
+                # Tìm file apk sau khi giải nén (ưu tiên arm64)
                 FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
                 [ -z "$FOUND_KOWX_APK" ] && FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | head -n 1)
 
@@ -140,11 +140,12 @@ jobs:
                 echo "⚠️ Downloaded artifact zip is empty!"
               fi
             else
-              echo "⚠️ No artifacts available in Run ID $KOWX_RUN_ID"
+              echo "⚠️ No artifacts matching 'manager' or 'apk' found in Run ID $KOWX_RUN_ID"
             fi
           else
             echo "⚠️ Could not retrieve any successful runs for KOWX712/KernelSU"
           fi
+
 
           # ----------------------------------------------------
           # 3. Tổng kết số lượng APK
