@@ -101,8 +101,17 @@ jobs:
           TAG_NAME="v${{ github.run_number }}-${BUILD_DATE}"
           echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
 
-          # Fetch KowSU Manager
-          KOWSU_URL=$(curl -s "https://api.github.com/repos/KOWX712/KowSU/releases/latest" | jq -r '.html_url // "https://github.com/KOWX712/KowSU/releases"')
+          # Fetch KowSU Manager (CI Run ID & URL)
+          KOWSU_RUN_ID=$(curl -s "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+
+          if [ -n "$KOWSU_RUN_ID" ]; then
+            KOWSU_URL="https://github.com/KOWX712/KernelSU/actions/runs/${KOWSU_RUN_ID}"
+            KOWSU_TITLE="KowSU Multi-Manager CI Run #${KOWSU_RUN_ID}"
+          else
+            KOWSU_URL="https://github.com/KOWX712/KernelSU/actions"
+            KOWSU_TITLE="KowSU Multi-Manager Actions"
+          fi
 
           # Fetch ReSukiSU Release
           RESUKISU_URL=$(curl -s "https://api.github.com/repos/ShirkNeko/ReSukiSU/releases/latest" | jq -r '.html_url // "https://github.com/Baka-SU/BakaSU/releases"')
@@ -142,7 +151,7 @@ jobs:
           ---
 
           ### 📱 Supported & Recommended KSU Managers
-          * 🦊 **KowSU Multi-Manager (Primary):** [Tải bản phát hành mới nhất](${KOWSU_URL})
+          * 🦊 **KowSU Multi-Manager (Primary):** [${KOWSU_TITLE}](${KOWSU_URL})
           * ⚡ **ReSukiSU Manager:** [Tải bản mới nhất tại đây](${RESUKISU_URL})
           * 🛡️ **SukiSU Manager (CI Auto-Build):** [${SUKISU_TITLE}](${SUKISU_ACTION_URL})
           EOF
