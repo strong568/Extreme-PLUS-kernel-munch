@@ -1,4 +1,4 @@
-name: "🚀 Build EXTREME++ Kernel (Tri-Variant: Battery, Bal-Gaming, Gaming)"
+name: "🚀 Build EXTREME++ Kernel (KowSU Multi-Manager & All Variants)"
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
           - Gaming
         default: all
       build_ksu:
-        description: 'Integrate KowSU (KOWX712 Multi-Manager)'
+        description: 'Integrate KowSU (KOWX712 Multi-Manager & SuSFS)'
         required: true
         type: boolean
         default: true
@@ -25,41 +25,16 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-    timeout-minutes: 180 
+    timeout-minutes: 180
 
     steps:
-      - name: "📢 Telegram: Build Started"
-        continue-on-error: true
-        run: |
-          TARGETS=()
-          [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_CHAT_ID }}")
-          [ -n "${{ secrets.TELEGRAM_DM_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_DM_ID }}")
-
-          ROOT_LABEL="🛡️ Architecture: Pure Clean Base (No Root)"
-          if [ "${{ inputs.build_ksu }}" = "true" ]; then
-            ROOT_LABEL="⚡ Root: KowSU (KOWX712 Multi-Manager v3.x)"
-          fi
-
-          VAR_LABEL="${{ inputs.variant }}"
-          if [ "$VAR_LABEL" = "Gaming" ]; then
-            VAR_LABEL="Truly Gaming (3.2GHz Monster)"
-          elif [ "$VAR_LABEL" = "all" ]; then
-            VAR_LABEL="All (Battery, Bal-Gaming, Truly Gaming 3.2GHz)"
-          fi
-
-          for chat in "${TARGETS[@]}"; do
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id="$chat" \
-              -d text="🚀 <b>EXTREME++ Build Started!</b>%0A📱 Device: POCO F4 (munch)%0A${ROOT_LABEL}%0A⚡ Variant: ${VAR_LABEL}" -d parse_mode="HTML" || true
-          done
-
       - name: "📦 Checkout config repo"
         uses: actions/checkout@v4
 
       - name: "🛠️ Install build dependencies"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip jq
 
       - name: "⚡ Setup ZyC-Clang 16"
         run: |
@@ -77,7 +52,6 @@ jobs:
           cp patches/* kernel/
           chmod +x kernel/build_kernel.sh
 
-      # 🔥 FIX 2: THE MASTER ZRAM/SWAP HACK (Fixed for GitHub OverlayFS)
       - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
         run: |
           echo "[*] Checking current RAM..."
@@ -95,74 +69,101 @@ jobs:
           cd kernel
           TARGET_VAR="${{ inputs.variant }}"
           [ -z "$TARGET_VAR" ] && TARGET_VAR="all"
+
           KSU_MODE="noroot"
           if [ "${{ inputs.build_ksu }}" = "true" ]; then
             KSU_MODE="ksu"
           fi
+
           ./build_kernel.sh munch "$KSU_MODE" "$TARGET_VAR"
-          
-          echo "✅ Built ZIP files:"
+
+          BUILD_DATE=$(TZ='Asia/Ho_Chi_Minh' date +'%Y%m%d')
+
+          for file in EXTREME++*.zip; do
+            [ -e "$file" ] || continue
+            BASE_NAME="${file%.zip}"
+            if [ "${{ inputs.build_ksu }}" = "true" ]; then
+              NEW_NAME="${BASE_NAME}-KowSU-SuSFS-${BUILD_DATE}.zip"
+            else
+              NEW_NAME="${BASE_NAME}-${BUILD_DATE}.zip"
+            fi
+            mv "$file" "$NEW_NAME"
+            echo "Renamed: $file -> $NEW_NAME"
+          done
+
+          echo "✅ Final ZIP files:"
           ls -lh EXTREME++*.zip
+
+      - name: "📝 Generate Release Notes & Fetch Managers"
+        id: release_info
+        run: |
+          BUILD_DATE=$(TZ='Asia/Ho_Chi_Minh' date +'%Y%m%d')
+          TAG_NAME="v${{ github.run_number }}-${BUILD_DATE}"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          # Fetch KowSU Manager
+          KOWSU_URL=$(curl -s "https://api.github.com/repos/KOWX712/KowSU/releases/latest" | jq -r '.html_url // "https://github.com/KOWX712/KowSU/releases"')
+
+          # Fetch ReSukiSU Release
+          RESUKISU_URL=$(curl -s "https://api.github.com/repos/ShirkNeko/ReSukiSU/releases/latest" | jq -r '.html_url // "https://github.com/Baka-SU/BakaSU/releases"')
+
+          # Fetch SukiSU-Ultra CI Run
+          API_RES=$(curl -s "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=success&branch=main")
+          SUKISU_ACTION_URL=$(echo "$API_RES" | jq -r '[.workflow_runs[] | select(.name | test("Build Manager"; "i"))][0].html_url // empty')
+          SUKISU_RUN_NUM=$(echo "$API_RES" | jq -r '[.workflow_runs[] | select(.name | test("Build Manager"; "i"))][0].run_number // empty')
+
+          if [ -z "$SUKISU_ACTION_URL" ]; then
+            SUKISU_ACTION_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra/actions"
+            SUKISU_TITLE="SukiSU-Ultra CI Actions"
+          else
+            SUKISU_TITLE="SukiSU-Ultra Build Manager #${SUKISU_RUN_NUM}"
+          fi
+
+          cat << EOF > release_body.md
+          ## 🔥 EXTREME++ Kernel Release #${{ github.run_number }}
+
+          * **Device:** POCO F4 (munch)
+          * **Target ROM:** HyperOS / MIUI (Android 13–17)
+          * **Toolchain:** ZyC-Clang 16.0.6 + LLD
+          * **Root Engine:** KowSU Multi-Manager & SuSFS Non-GKI (Enabled: ${{ inputs.build_ksu }})
+          * **Variant:** ${{ inputs.variant }}
+          * **Build Date:** $(TZ='Asia/Ho_Chi_Minh' date +'%Y-%m-%d %H:%M:%S') (GMT+7)
+
+          ---
+
+          ### ✨ Key Features
+          * **Tri-Variant Profiles:** Battery (~2.5GHz), Bal-Gaming (2.84GHz), Gaming Monster (3.2GHz)
+          * **Networking:** TCP BBR Congestion Control (Low Latency / Ping)
+          * **GPU Optimization:** FakeDreamer 150MHz - 670MHz UV & msm-adreno-tz
+          * **Storage:** Zero-Overhead Block I/O Stats Disabled
+          * **Memory Management:** Smart LMK Sniper & Background App Protection
+          * **Governor:** Safe Schedutil Boot + Module Tuning
+
+          ---
+
+          ### 📱 Supported & Recommended KSU Managers
+          * 🦊 **KowSU Multi-Manager (Primary):** [Tải bản phát hành mới nhất](${KOWSU_URL})
+          * ⚡ **ReSukiSU Manager:** [Tải bản mới nhất tại đây](${RESUKISU_URL})
+          * 🛡️ **SukiSU Manager (CI Auto-Build):** [${SUKISU_TITLE}](${SUKISU_ACTION_URL})
+          EOF
 
       - name: "📦 Upload Build Artifacts"
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: EXTREME++_Release_${{ github.run_number }}
+          name: EXTREME++_Artifacts_${{ github.run_number }}
           path: kernel/EXTREME++*.zip
           if-no-files-found: error
 
-      - name: "📢 Telegram: Official Release Broadcast"
+      - name: "🚀 Publish to GitHub Releases"
         if: success()
-        run: |
-          ROOT_DESC="🛡️ <b>Root:</b> Pure Clean Base (No Root)"
-          if [ "${{ inputs.build_ksu }}" = "true" ]; then
-            ROOT_DESC="⚡ <b>Root:</b> Inbuilt KowSU (KOWX712 Multi-Manager v3.x)"
-          fi
-
-          MSG="🔥 <b>EXTREME++ Official Release #${{ github.run_number }}</b>%0A%0A"
-          MSG="${MSG}📱 <b>Device:</b> POCO F4 (munch)%0A"
-          MSG="${MSG}⚡ <b>Target ROM:</b> HyperOS / MIUI Android 13–17%0A"
-          MSG="${MSG}🛠️ <b>Toolchain:</b> ZyC-Clang 16.0.6 + LLD%0A"
-          MSG="${MSG}👑 <b>Author:</b> Extreme++gaming by PandeyJi%0A"
-          MSG="${MSG}${ROOT_DESC}%0A%0A"
-          MSG="${MSG}✨ <b>Available Variants:</b>%0A"
-          MSG="${MSG}• 🔋 <b>Battery:</b> ~2.5GHz (2419200 kHz) - Massive Battery Backup%0A"
-          MSG="${MSG}• ⚖️ <b>Bal-Gaming:</b> 2.84GHz (2841600 kHz) - Balanced Long Gaming%0A"
-          MSG="${MSG}• 🚀 <b>Gaming:</b> Truly 3.2GHz (3187200 kHz) - Pure Performance Monster%0A%0A"
-          MSG="${MSG}📦 <i>Uploading flashable ZIP packages below...</i>"
-
-          TARGETS=()
-          [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_CHAT_ID }}")
-          [ -n "${{ secrets.TELEGRAM_DM_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_DM_ID }}")
-
-          for chat in "${TARGETS[@]}"; do
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id="$chat" \
-              -d text="$MSG" \
-              -d parse_mode="HTML" || true
-          done
-
-          for z in $(find "$GITHUB_WORKSPACE/kernel" -maxdepth 1 -name "EXTREME++*.zip"); do
-            echo "Uploading $z to Telegram..."
-            for chat in "${TARGETS[@]}"; do
-              curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-                -F chat_id="$chat" \
-                -F document=@"$z" \
-                -F caption="📦 $(basename "$z")" || true
-            done
-          done
-
-      - name: "📢 Telegram: Build Failed"
-        if: failure()
-        run: |
-          TARGETS=()
-          [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_CHAT_ID }}")
-          [ -n "${{ secrets.TELEGRAM_DM_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_DM_ID }}")
-
-          for chat in "${TARGETS[@]}"; do
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id="$chat" \
-              -d text="❌ <b>EXTREME++ Build #${{ github.run_number }} FAILED!</b>%0APlease check GitHub Actions workflow logs." \
-              -d parse_mode="HTML" || true
-          done
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag_name }}
+          name: "EXTREME++ Kernel Release #${{ github.run_number }}"
+          body_path: release_body.md
+          files: kernel/EXTREME++*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
