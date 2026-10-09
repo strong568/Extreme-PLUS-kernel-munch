@@ -1,81 +1,190 @@
-name: 📲 Send Root Manager (PandeyJI-9)
+name: 📲 Publish All KernelSU Managers to Release & Artifacts
 
 on:
-  workflow_dispatch: # Manual trigger button
+  workflow_dispatch: # Kích hoạt thủ công
+
+permissions:
+  contents: write # Quyền tạo Release
+  actions: read   # Quyền đọc GitHub Actions Artifacts
 
 jobs:
-  push_apk_telegram:
-    name: "Fetch & Send Manager"
+  publish_manager:
+    name: "Fetch, Archive & Release All Managers"
     runs-on: ubuntu-latest
 
     steps:
-      - name: "🔍 Fetch Latest Manager APK"
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🔍 Fetch Latest Manager APKs"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[*] Contacting GitHub API for Manager APK..."
+          mkdir -p apk_output
           REPOS=(
-            "KOWX712/KernelSU"
-            "ReSukiSU/ReSukiSU"
             "rsuntk/KernelSU"
             "tiann/KernelSU"
+            "Baka-SU/BakaSU"
+            "SukiSU-Ultra/SukiSU-Ultra"
+            "backslashxx/KernelSU"
+            "KernelSU-Next/KernelSU-Next"
           )
-          APK_URL=""
-          VERSION_TAG=""
+
+          COUNT=0
+
+          # ----------------------------------------------------
+          # 1. Quét Releases từ các repo GitHub thông thường
+          # ----------------------------------------------------
           for repo in "${REPOS[@]}"; do
-            echo "[*] Checking release source: $repo"
+            echo "========================================"
+            echo "[*] Processing: $repo"
+            OWNER="${repo%%/*}"
+            
             API_URL="https://api.github.com/repos/${repo}/releases"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
-            FOUND_URL=$(echo "$DATA" | grep "browser_download_url" | grep -i "\.apk" | cut -d '"' -f 4 | head -n 1)
-            if [ -n "$FOUND_URL" ]; then
-              APK_URL="$FOUND_URL"
-              VERSION_TAG=$(echo "$DATA" | grep '"tag_name":' | cut -d '"' -f 4 | head -n 1)
-              echo "✅ Located APK in $repo: tag $VERSION_TAG -> $APK_URL"
-              break
+
+            # Ưu tiên arm64-v8a cho Poco F4, fallback về universal hoặc apk bất kỳ
+            ASSET_INFO=$(echo "$DATA" | jq -r '
+              [ .[] | {
+                  tag: .tag_name, 
+                  asset: (
+                    (.assets[]? | select(.name | test("arm64-v8a.*\\.apk$"; "i"))) //
+                    (.assets[]? | select(.name | test("universal.*\\.apk$"; "i"))) //
+                    (.assets[]? | select(.name | test("\\.apk$"; "i")))
+                  )
+                } 
+              ] | map(select(.asset != null)) | first // empty
+            ')
+
+            APK_URL=$(echo "$ASSET_INFO" | jq -r '.asset.browser_download_url // empty')
+            RAW_FILE_NAME=$(echo "$ASSET_INFO" | jq -r '.asset.name // empty')
+            VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
+
+            if [ -n "$APK_URL" ]; then
+              if [[ "$repo" == "Baka-SU/BakaSU" ]] || [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+                FILE_NAME="$RAW_FILE_NAME"
+              elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
+                FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
+              else
+                FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
+              fi
+
+              echo "⬇️ Downloading: $FILE_NAME"
+              echo "    URL: $APK_URL"
+              curl -fLSs -o "apk_output/$FILE_NAME" "$APK_URL" || wget -q -O "apk_output/$FILE_NAME" "$APK_URL"
+
+              if [ -s "apk_output/$FILE_NAME" ]; then
+                echo "✅ Saved: apk_output/$FILE_NAME"
+                COUNT=$((COUNT + 1))
+              fi
+            else
+              echo "⚠️ No APK asset found in $repo"
             fi
           done
 
-          if [ -z "$APK_URL" ]; then
-            echo "❌ Failed to locate APK in any release repository!"
-            exit 1
-          fi
+          # ----------------------------------------------------
+          # 2. Lấy APK mới nhất từ KOWX712 Actions Artifacts
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "[*] Fetching latest artifact from KOWX712/KernelSU actions..."
 
-          echo "Downloading version: $VERSION_TAG"
-          FILE_NAME="RootManager_${VERSION_TAG}.apk"
-          
-          curl -fLSs -o "$FILE_NAME" "$APK_URL" || wget -q -O "$FILE_NAME" "$APK_URL"
-          
-          # Check if file exists and is not empty
-          if [ -s "$FILE_NAME" ]; then
-            echo "APK_FILE=$FILE_NAME" >> $GITHUB_ENV
-            echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-            echo "✅ Download complete: $FILE_NAME"
+          KOWX_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+
+          if [ -n "$KOWX_RUN_ID" ]; then
+            echo "[*] Found latest successful Run ID: $KOWX_RUN_ID"
+
+            ARTIFACTS_DATA=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/KOWX712/KernelSU/actions/runs/${KOWX_RUN_ID}/artifacts")
+
+            # Chỉ lấy DUY NHẤT 1 artifact đầu tiên khớp điều kiện (dùng first)
+            ARTIFACT_DOWNLOAD_URL=$(echo "$ARTIFACTS_DATA" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .archive_download_url // empty
+            ')
+            ARTIFACT_NAME=$(echo "$ARTIFACTS_DATA" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .name // empty
+            ')
+
+            if [ -n "$ARTIFACT_DOWNLOAD_URL" ]; then
+              echo "[*] Downloading artifact: $ARTIFACT_NAME..."
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "kowx_temp.zip" \
+                "$ARTIFACT_DOWNLOAD_URL"
+
+              if [ -s "kowx_temp.zip" ]; then
+                mkdir -p kowx_extracted
+                unzip -q -o "kowx_temp.zip" -d kowx_extracted/
+                
+                # Tìm file apk sau khi giải nén (ưu tiên arm64)
+                FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                [ -z "$FOUND_KOWX_APK" ] && FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_KOWX_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_KOWX_APK")
+                  TARGET_NAME="KOWX_${ORIGINAL_NAME}"
+                  cp "$FOUND_KOWX_APK" "apk_output/$TARGET_NAME"
+                  echo "✅ Saved KOWX APK: apk_output/$TARGET_NAME"
+                  COUNT=$((COUNT + 1))
+                else
+                  echo "⚠️ No APK file found inside KOWX artifact zip"
+                fi
+                rm -rf kowx_temp.zip kowx_extracted
+              else
+                echo "⚠️ Downloaded artifact zip is empty!"
+              fi
+            else
+              echo "⚠️ No artifacts matching 'manager' or 'apk' found in Run ID $KOWX_RUN_ID"
+            fi
           else
-            echo "❌ Failed to download APK!"
+            echo "⚠️ Could not retrieve any successful runs for KOWX712/KernelSU"
+          fi
+
+
+          # ----------------------------------------------------
+          # 3. Tổng kết số lượng APK
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "Total APKs fetched: $COUNT"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ No files downloaded!"
             exit 1
           fi
 
-      - name: "🚀 Send APK to Telegram"
-        run: |
-          CAPTION="🔥 <b>EXTREME++ Root Manager | Maintainer: PandeyJI-9</b>
-          
-          📦 <b>Version:</b> <code>${{ env.VERSION_TAG }}</code>
-          ⚙️ <b>Type:</b> KowSU / Universal Multi-Manager (Zero-Failure App Profile)
-          📱 <b>Device:</b> POCO F4 (munch)
-          
-          ⬇️ <i>Install this manager to control your root access. Seamlessly synced with EXTREME++ KowSU engine with 100% root grant support!</i>"
-          
-          TARGETS=()
-          [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_CHAT_ID }}")
-          [ -n "${{ secrets.TELEGRAM_DM_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_DM_ID }}")
+          RELEASE_TAG="KSU_Managers_$(date +'%Y%m%d_%H%M%S')"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
 
-          for chat in "${TARGETS[@]}"; do
-            echo "[*] Uploading APK to Telegram $chat..."
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-              -F chat_id="$chat" \
-              -F document="@${{ env.APK_FILE }}" \
-              -F caption="$CAPTION" \
-              -F parse_mode="HTML" || true
-          done
-          
-          echo "[+] Successfully pushed to Telegram!"
+      - name: "📦 Upload APKs as Action Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: KernelSU_Managers_All
+          path: apk_output/*.apk
+          retention-days: 7
+
+      - name: "🚀 Publish to GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
+          body: |
+            ### 📦 KernelSU Managers Collection
+            Tải tự động đầy đủ 7 biến thể:
+            - **Official:** `tiann/KernelSU`
+            - **Rissu / SuSFS:** `rsuntk/KernelSU`
+            - **ReSukiSU:** `Baka-SU/BakaSU`
+            - **SukiSU-Ultra:** `SukiSU-Ultra/SukiSU-Ultra`
+            - **Backslashxx:** `backslashxx/KernelSU`
+            - **Next:** `KernelSU-Next/KernelSU-Next`
+            - **KOWX712:** `KOWX712/KernelSU` (Latest Action Artifact)
+          files: apk_output/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
