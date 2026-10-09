@@ -170,4 +170,20 @@ jobs:
       - name: "🚀 Publish to GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
+          body: |
+            ### 📦 KernelSU Managers Collection
+            Tải tự động đầy đủ 7 biến thể:
+            - **Official:** `tiann/KernelSU`
+            - **Rissu / SuSFS:** `rsuntk/KernelSU`
+            - **ReSukiSU:** `Baka-SU/BakaSU`
+            - **SukiSU-Ultra:** `SukiSU-Ultra/SukiSU-Ultra`
+            - **Backslashxx:** `backslashxx/KernelSU`
+            - **Next:** `KernelSU-Next/KernelSU-Next`
+            - **KOWX712:** `KOWX712/KernelSU` (Latest Action Artifact)
+          files: apk_output/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
