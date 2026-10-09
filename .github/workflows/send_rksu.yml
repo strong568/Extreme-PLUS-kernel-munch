@@ -48,7 +48,16 @@ jobs:
           fi
 
           echo "Downloading version: $VERSION_TAG"
-          FILE_NAME="RKSU_Manager_${VERSION_TAG}.apk"
+
+          for repo in "${REPOS[@]}"; do
+          # Lấy phần chuỗi đứng trước dấu /
+             OWNER="${repo%%/*}"
+    
+             FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
+             echo "$FILE_NAME"
+           done
+
+    #      FILE_NAME="RKSU_Manager_${VERSION_TAG}.apk"
           
           curl -fLSs -o "$FILE_NAME" "$APK_URL" || wget -q -O "$FILE_NAME" "$APK_URL"
           
