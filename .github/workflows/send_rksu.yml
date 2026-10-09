@@ -24,6 +24,8 @@ jobs:
             "rsuntk/KernelSU"
             "tiann/KernelSU"
             "ReSukiSU/ReSukiSU"
+            "backslashxx/KernelSU"
+            "KOWX712/KernelSU"
           )
           APK_URL=""
           VERSION_TAG=""
