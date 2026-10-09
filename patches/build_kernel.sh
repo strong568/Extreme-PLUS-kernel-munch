@@ -399,6 +399,231 @@ if ! git clone --depth=1 https://github.com/re-noroi/anykernel3-test -b munch an
     echo "[!] Fallback to AstideLabs AnyKernel3..."
     git clone --depth=1 https://github.com/AstideLabs/AnyKernel3 -b kona anykernel
 fi
+rm -rf anykernel/.git anykernel/kernels
+
+# Copy multi-DTB table into anykernel
+if [ -f "${OUT_DIR}/arch/arm64/boot/dtb" ]; then
+    cp "${OUT_DIR}/arch/arm64/boot/dtb" anykernel/dtb
+    echo "[+] DTB table copied from arch/arm64/boot/dtb"
+elif [ -f "${OUT_DIR}/arch/arm64/boot/dtb.img" ]; then
+    cp "${OUT_DIR}/arch/arm64/boot/dtb.img" anykernel/dtb
+    echo "[+] DTB table copied from arch/arm64/boot/dtb.img"
+else
+    cat ${OUT_DIR}/arch/arm64/boot/dts/vendor/qcom/*.dtb > anykernel/dtb
+    echo "[+] Concatenated all compiled DTBs into anykernel/dtb"
+fi
+
+# NOTE: Stock DTBO partition is preserved 100% untouched to ensure OEM display panel calibrations & recovery work flawlessly!
+echo "[*] Skipping DTBO packaging (Stock DTBO on device is preserved)..."
+
+# Create 00-extreme-performance.sh post-boot service
+cat > anykernel/00-extreme-performance.sh << 'EOF'
+#!/system/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  PROJECT EXTREME++ — Joyose, Governor & Sniper Boot Service
+#  POCO F4 (munch / SM8250-AC Kona) | HyperOS ONLY
+# ═══════════════════════════════════════════════════════════════
+
+(
+# Wait for Android framework to fully complete boot in background without blocking init
+while [ "$(getprop sys.boot_completed)" != "1" ]; do
+    sleep 5
+done
+
+# Extra settling delay to ensure all critical system daemons have initialized
+sleep 15
+
+# ── 0. Post-Boot Bootloader Lock Property Spoofing (Zero Bootloop, 100% Locked) ──
+# Android has fully booted! AVB verification and partition mounting are 100% complete.
+# Now spoof system properties to locked/green so Play Integrity, Key Attestation & banking apps report locked!
+for rp in resetprop /data/adb/ksu/bin/ksud /data/adb/ksud; do
+    if command -v resetprop >/dev/null 2>&1; then
+        resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+        resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+        resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+        resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+        resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+        resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+        resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+        resetprop -n ro.warranty_bit 0 2>/dev/null || true
+        echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via resetprop!" > /dev/kmsg 2>/dev/null || true
+        break
+    elif [ -x /data/adb/ksu/bin/ksud ]; then
+        /data/adb/ksu/bin/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+        /data/adb/ksu/bin/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+        echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via ksud resetprop!" > /dev/kmsg 2>/dev/null || true
+        break
+    elif [ -x /data/adb/ksud ]; then
+        /data/adb/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+        /data/adb/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+        /data/adb/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+        /data/adb/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+        /data/adb/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+        /data/adb/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+        /data/adb/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+        /data/adb/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+        echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via legacy ksud resetprop!" > /dev/kmsg 2>/dev/null || true
+        break
+    fi
+done
+
+# ── 1. Dynamic Task Weighting (Schedtune Boost) & WALT Core Spillover ──
+# Dynamic Task Weighting: Lean boost for top-app on render burst without starving audio HAL or system services
+echo 5 > /dev/stune/top-app/schedtune.boost 2>/dev/null
+echo 1 > /dev/stune/top-app/schedtune.prefer_idle 2>/dev/null
+echo 5 > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null
+echo 1 > /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 2>/dev/null
+
+# Clean Core Spillover: Keep light/background tasks on Little cores, migrate to Gold at 85%, Prime at 95%
+echo "85 95" > /proc/sys/kernel/sched_upmigrate 2>/dev/null
+echo "65 75" > /proc/sys/kernel/sched_downmigrate 2>/dev/null
+echo 85 > /proc/sys/kernel/sched_group_upmigrate 2>/dev/null
+echo 70 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null
+
+# ── 2. Power Efficient Workqueues & Deep Sleep Suspend ──
+echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
+
+# Schedutil & EXTREME+ Rate Limits (500us ramp-up, 20ms decay)
+for gov in /sys/devices/system/cpu/cpufreq/policy*/schedutil /sys/devices/system/cpu/cpufreq/policy*/extreme+; do
+    if [ -d "$gov" ]; then
+        echo 500 >& 20ms decay)
+scripts/config --file "${OUT_DIR}/.config" \
+    -e CPU_FREQ_GOV_EXTREME_PLUS \
+    -d CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
+    -e CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+    --set-str CPU_FREQ_DEFAULT_GOV "schedutil"
+
+# Native source patches for VM & Schedutil tunables
+if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
+    sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 500;/' kernel/sched/cpufreq_schedutil.c
+    echo "[+] Schedutil up_rate_limit_us tuned to 500us in kernel/sched/cpufreq_schedutil.c"
+fi
+if [ -f "drivers/cpufreq/cpufreq_schedutil.c" ]; then
+    sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 500;/' drivers/cpufreq/cpufreq_schedutil.c
+    echo "[+] Schedutil up_rate_limit_us tuned to 500us in drivers/cpufreq/cpufreq_schedutil.c"
+fi
+if [ -f "mm/vmscan.c" ]; then
+    echo "[+] Preserving balanced OEM vm_swappiness = 60 in mm/vmscan.c"
+fi
+if [ -f "fs/dcache.c" ]; then
+    sed -i 's/int sysctl_vfs_cache_pressure __read_mostly = [0-9]*;/int sysctl_vfs_cache_pressure __read_mostly = 100;/' fs/dcache.c
+    echo "[+] Optimized sysctl_vfs_cache_pressure to 100 in fs/dcache.c"
+fi
+
+# 🚀 Full Xiaomi HyperOS / MIUI Kernel Subsystems
+scripts/config --file "${OUT_DIR}/.config" \
+    --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
+    -e PERF_CRITICAL_RT_TASK \
+    -e SF_BINDER \
+    -e OVERLAY_FS \
+    -e MIGT \
+    -e MIGT_ENERGY_MODEL \
+    -e MIHW \
+    -e PACKAGE_RUNTIME_INFO \
+    -e BINDER_OPT \
+    -e KPERFEVENTS \
+    -e PERF_HUMANTASK \
+    -d LTO_CLANG \
+    -e LTO_NONE \
+    -d SHADOW_CALL_STACK \
+    -e XIAOMI_MIUI \
+    -d MI_MEMORY_SYSFS \
+    -e TASK_DELAY_ACCT \
+    -e MIUI_ZRAM_MEMORY_TRACKING \
+    -e PERF_HELPER \
+    -e BOOTUP_RECLAIM \
+    -e MI_RECLAIM \
+    -e RTMM \
+    -e MILLET_CGROUP \
+    -e MILLET_SIG \
+    -e MILLET_BINDER \
+    -e MILLET_PKG \
+    -e MILLET_BINDER_GKI \
+    -e MILLET_CORE \
+    -e MILLET_HS \
+    -e BINDER_PRIO \
+    -d REKERNEL \
+    -d REKERNEL_NETWORK \
+    -d LTO_CLANG_THIN -d CFI_CLANG
+
+# 🚀 TCP BBR Congestion Control & Lightweight Gaming Tunables (Disable I/O Stats & Debugging)
+scripts/config --file "${OUT_DIR}/.config" \
+    -e TCP_CONG_BBR \
+    -e DEFAULT_BBR \
+    --set-str DEFAULT_TCP_CONG "bbr" \
+    -e NET_SCH_FQ \
+    -e NET_SCH_FQ_CODEL \
+    -d TASK_IO_ACCOUNTING \
+    -d BLK_DEV_IO_TRACE \
+    -d SCHEDSTATS \
+    -d PROVE_LOCKING \
+    -d LOCKDEP \
+    -d LOCK_STAT \
+    -d DEBUG_KMEMLEAK \
+    -d DEBUG_PREEMPT
+
+# 🚀 Root Configuration: KowSU Multi-Manager vs Pure Clean Base
+if [ "$ENABLE_KSU" -eq 1 ]; then
+    echo "[*] Injecting Full KowSU Multi-Manager Configuration into .config..."
+    scripts/config --file "${OUT_DIR}/.config" \
+        -e KSU \
+        -e KPROBES \
+        -e HAVE_KPROBES \
+        -e KRETPROBES \
+        -e HAVE_SYSCALL_TRACEPOINTS \
+        -e THREAD_INFO_IN_TASK \
+        -d KSU_DISABLE_MANAGER \
+        -d KSU_DISABLE_POLICY
+else
+    echo "[*] Disabling embedded KSU for Pure Clean Kernel..."
+    scripts/config --file "${OUT_DIR}/.config" \
+        -d KSU
+    sed -i '/CONFIG_KSU/d' "${OUT_DIR}/.config" 2>/dev/null || true
+fi
+
+echo "[*] Synchronizing final kernel config with olddefconfig..."
+make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
+
+# ------------------------------------------
+# 9. Multi-Variant Architecture & AnyKernel3 Preparation
+# ------------------------------------------
+TARGET_VARIANT="${3:-all}"
+VARIANTS_TO_BUILD=()
+case "${TARGET_VARIANT,,}" in
+    battery|2.5ghz|2.5|2.4ghz|2.4)
+        VARIANTS_TO_BUILD=("Battery")
+        ;;
+    bal-gaming|bal_gaming|balanced|2.8ghz|2.8)
+        VARIANTS_TO_BUILD=("Bal-Gaming")
+        ;;
+    gaming|3.2ghz|3.2)
+        VARIANTS_TO_BUILD=("Gaming")
+        ;;
+    all|both|*)
+        VARIANTS_TO_BUILD=("Battery" "Bal-Gaming" "Gaming")
+        ;;
+esac
+
+echo "[*] Selected Target Variant(s): ${VARIANTS_TO_BUILD[*]}"
+
+# Step 9a: Compile Shared Multi-DTB Table & DTBO
+echo "[*] Compiling Shared Multi-DTB Table & DTBO Image..."
+make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
+
+# ------------------------------------------
+# 10. AnyKernel3 Setup (FakeDreamer Munch Branch with Fallback)
+# ------------------------------------------
+echo "[*] Cloning AnyKernel3 (Munch branch)..."
+if ! git clone --depth=1 https://github.com/re-noroi/anykernel3-test -b munch anykernel; then
+    echo "[!] Fallback to AstideLabs AnyKernel3..."
+    git clone --depth=1 https://github.com/AstideLabs/AnyKernel3 -b kona anykernel
+fi
 rm -rf anykernel/.git
 
 # Copy multi-DTB table into anykernel
