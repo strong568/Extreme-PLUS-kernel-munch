@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write # Quyền tạo Release
+  actions: read   # Quyền đọc GitHub Actions Artifacts
 
 jobs:
   publish_manager:
@@ -31,16 +32,18 @@ jobs:
 
           COUNT=0
 
+          # ----------------------------------------------------
+          # 1. Quét Releases từ các repo GitHub thông thường
+          # ----------------------------------------------------
           for repo in "${REPOS[@]}"; do
             echo "========================================"
             echo "[*] Processing: $repo"
             OWNER="${repo%%/*}"
             
-            # Quét danh sách release (bao gồm cả pre-release)
             API_URL="https://api.github.com/repos/${repo}/releases"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
 
-            # Ưu tiên lấy file arm64-v8a cho Poco F4, nếu không có lấy universal hoặc file .apk đầu tiên
+            # Ưu tiên arm64-v8a cho Poco F4, fallback về universal hoặc apk bất kỳ
             ASSET_INFO=$(echo "$DATA" | jq -r '
               [ .[] | {
                   tag: .tag_name, 
@@ -58,8 +61,7 @@ jobs:
             VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
 
             if [ -n "$APK_URL" ]; then
-              # Giữ nguyên đúng tên file gốc do tác giả phát hành
-              if [[ "$repo" == "Baka-SU/BakaSU" ]] || [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+              if [[ "$repo" == "Baka-SU/BakaSU" ]] \vert{}\vert{} [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
                 FILE_NAME="$RAW_FILE_NAME"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
@@ -71,7 +73,6 @@ jobs:
               echo "    URL: $APK_URL"
               curl -fLSs -o "apk_output/$FILE_NAME" "$APK_URL" || wget -q -O "apk_output/$FILE_NAME" "$APK_URL"
 
-
               if [ -s "apk_output/$FILE_NAME" ]; then
                 echo "✅ Saved: apk_output/$FILE_NAME"
                 COUNT=$((COUNT + 1))
@@ -81,6 +82,73 @@ jobs:
             fi
           done
 
+          # ----------------------------------------------------
+          # 2. Lấy APK mới nhất từ KOWX712 Actions Artifacts
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "[*] Fetching latest artifact from KOWX712/KernelSU actions..."
+
+          KOWX_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+
+          if [ -n "$KOWX_RUN_ID" ]; then
+            echo "[*] Found latest successful Run ID: $KOWX_RUN_ID"
+
+            ARTIFACTS_DATA=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/KOWX712/KernelSU/actions/runs/${KOWX_RUN_ID}/artifacts")
+
+            ARTIFACT_DOWNLOAD_URL=$(echo "$ARTIFACTS_DATA" | jq -r '
+              (.artifacts[] | select(.name | test("apk|manager"; "i")) | .archive_download_url) //
+              .artifacts[0].archive_download_url // empty
+            ')
+            ARTIFACT_NAME=$(echo "$ARTIFACTS_DATA" | jq -r '
+              (.artifacts[] | select(.name | test("apk|manager"; "i")) | .name) //
+              .artifacts[0].name // empty
+            ')
+
+            if [ -n "$ARTIFACT_DOWNLOAD_URL" ]; then
+              echo "[*] Downloading artifact: $ARTIFACT_NAME..."
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "kowx_temp.zip" \
+                "$ARTIFACT_DOWNLOAD_URL"
+
+              if [ -s "kowx_temp.zip" ]; then
+                mkdir -p kowx_extracted
+                unzip -q -o "kowx_temp.zip" -d kowx_extracted/
+                
+                FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                [ -z "$FOUND_KOWX_APK" ] && FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_KOWX_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_KOWX_APK")
+                  TARGET_NAME="KOWX_${ORIGINAL_NAME}"
+                  cp "$FOUND_KOWX_APK" "apk_output/$TARGET_NAME"
+                  echo "✅ Saved KOWX APK: apk_output/$TARGET_NAME"
+                  COUNT=$((COUNT + 1))
+                else
+                  echo "⚠️ No APK file found inside KOWX artifact zip"
+                fi
+                rm -rf kowx_temp.zip kowx_extracted
+              else
+                echo "⚠️ Downloaded artifact zip is empty!"
+              fi
+            else
+              echo "⚠️ No artifacts available in Run ID $KOWX_RUN_ID"
+            fi
+          else
+            echo "⚠️ Could not retrieve any successful runs for KOWX712/KernelSU"
+          fi
+
+          # ----------------------------------------------------
+          # 3. Tổng kết số lượng APK
+          # ----------------------------------------------------
           echo "========================================"
           echo "Total APKs fetched: $COUNT"
 
@@ -102,19 +170,4 @@ jobs:
       - name: "🚀 Publish to GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
-          body: |
-            ### 📦 KernelSU Managers Collection
-            Tải tự động đầy đủ 6 biến thể:
-            - **Official:** `tiann/KernelSU`
-            - **Rissu / SuSFS:** `rsuntk/KernelSU`
-            - **ReSukiSU:** `Baka-SU/BakaSU`
-            - **SukiSU-Ultra:** `SukiSU-Ultra/SukiSU-Ultra`
-            - **Backslashxx:** `backslashxx/KernelSU`
-            - **Next:** `KernelSU-Next/KernelSU-Next`
-          files: apk_output/*.apk
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ env.RELEASE_
