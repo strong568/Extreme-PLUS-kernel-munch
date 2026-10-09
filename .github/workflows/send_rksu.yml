@@ -29,6 +29,8 @@ jobs:
           )
           APK_URL=""
           VERSION_TAG=""
+          FOUND_OWNER=""
+
           for repo in "${REPOS[@]}"; do
             echo "[*] Checking release source: $repo"
             API_URL="https://api.github.com/repos/${repo}/releases"
@@ -37,6 +39,7 @@ jobs:
             if [ -n "$FOUND_URL" ]; then
               APK_URL="$FOUND_URL"
               VERSION_TAG=$(echo "$DATA" | grep '"tag_name":' | cut -d '"' -f 4 | head -n 1)
+              FOUND_OWNER="${repo%%/*}"
               echo "✅ Located APK in $repo: tag $VERSION_TAG ->$APK_URL"
               break
             fi
@@ -47,17 +50,8 @@ jobs:
             exit 1
           fi
 
-          echo "Downloading version: $VERSION_TAG"
-
-          for repo in "${REPOS[@]}"; do
-          # Lấy phần chuỗi đứng trước dấu /
-             OWNER="${repo%%/*}"
-    
-             FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
-             echo "$FILE_NAME"
-           done
-
-    #      FILE_NAME="RKSU_Manager_${VERSION_TAG}.apk"
+          echo "Downloading version: $VERSION_TAG from$FOUND_OWNER"
+          FILE_NAME="${FOUND_OWNER}_Manager_${VERSION_TAG}.apk"
           
           curl -fLSs -o "$FILE_NAME" "$APK_URL" || wget -q -O "$FILE_NAME" "$APK_URL"
           
@@ -65,6 +59,7 @@ jobs:
           if [ -s "$FILE_NAME" ]; then
             echo "APK_FILE=$FILE_NAME" >> $GITHUB_ENV
             echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
+            echo "FOUND_OWNER=$FOUND_OWNER" >> $GITHUB_ENV
             echo "✅ Download complete: $FILE_NAME"
           else
             echo "❌ Failed to download APK!"
@@ -82,15 +77,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.VERSION_TAG }}
-          name: "RKSU Manager ${{ env.VERSION_TAG }}"
+          name: "${{ env.FOUND_OWNER }} Manager${{ env.VERSION_TAG }}"
           body: |
-            ### 🔥 EXTREME++ RKSU Manager
+            ### 🔥 EXTREME++ Manager
+            - **Source:** `${{ env.FOUND_OWNER }}`
             - **Version:** `${{ env.VERSION_TAG }}`
-            - **Type:** RKSU (Rissu KernelSU + SuSFS)
             - **Device:** POCO F4 (munch)
           files: ${{ env.APK_FILE }}
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
