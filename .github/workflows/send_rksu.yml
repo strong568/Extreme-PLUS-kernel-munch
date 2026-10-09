@@ -24,6 +24,7 @@ jobs:
             "rsuntk/KernelSU"
             "tiann/KernelSU"
             "Baka-SU/BakaSU"
+            "SukiSU-Ultra/SukiSU-Ultra"
             "backslashxx/KernelSU"
             "KernelSU-Next/KernelSU-Next"
           )
@@ -57,12 +58,9 @@ jobs:
             VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
 
             if [ -n "$APK_URL" ]; then
-              # Xử lý đặt tên file rõ nguồn:
-              # - Baka-SU (ReSukiSU) -> BakaSU_ReSukiSU_Manager_<tag>.apk
-              # - KernelSU-Next -> KSU_Next_Manager_<tag>.apk
-              # - Các nguồn khác -> <Owner>_Manager_<tag>.apk
-              if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
-                FILE_NAME="BakaSU_ReSukiSU_Manager_${VERSION_TAG}.apk"
+              # Giữ nguyên đúng tên file gốc do tác giả phát hành
+              if [[ "$repo" == "Baka-SU/BakaSU" ]] || [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+                FILE_NAME="$RAW_FILE_NAME"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
               else
@@ -72,6 +70,7 @@ jobs:
               echo "⬇️ Downloading: $FILE_NAME"
               echo "    URL: $APK_URL"
               curl -fLSs -o "apk_output/$FILE_NAME" "$APK_URL" || wget -q -O "apk_output/$FILE_NAME" "$APK_URL"
+
 
               if [ -s "apk_output/$FILE_NAME" ]; then
                 echo "✅ Saved: apk_output/$FILE_NAME"
@@ -107,10 +106,11 @@ jobs:
           name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
           body: |
             ### 📦 KernelSU Managers Collection
-            Tải tự động đầy đủ 5 nhánh Manager:
+            Tải tự động đầy đủ 6 biến thể:
             - **Official:** `tiann/KernelSU`
             - **Rissu / SuSFS:** `rsuntk/KernelSU`
             - **ReSukiSU:** `Baka-SU/BakaSU`
+            - **SukiSU-Ultra:** `SukiSU-Ultra/SukiSU-Ultra`
             - **Backslashxx:** `backslashxx/KernelSU`
             - **Next:** `KernelSU-Next/KernelSU-Next`
           files: apk_output/*.apk
