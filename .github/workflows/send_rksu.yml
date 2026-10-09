@@ -1,4 +1,4 @@
-name: 📲 Publish RKSU Manager to Release & Artifacts
+name: 📲 Publish All KernelSU Managers to Release & Artifacts
 
 on:
   workflow_dispatch: # Kích hoạt thủ công
@@ -8,87 +8,107 @@ permissions:
 
 jobs:
   publish_manager:
-    name: "Fetch, Archive & Release Manager"
+    name: "Fetch, Archive & Release All Managers"
     runs-on: ubuntu-latest
 
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@v4
 
-      - name: "🔍 Fetch Latest Manager APK"
+      - name: "🔍 Fetch Latest Manager APKs from All Repos"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[*] Contacting GitHub API for Manager APK..."
+          mkdir -p apk_output
           REPOS=(
-            "backslashxx/KernelSU"
             "rsuntk/KernelSU"
-            "ReSukiSU/ReSukiSU"
             "tiann/KernelSU"
+            "ReSukiSU/ReSukiSU"
+            "backslashxx/KernelSU"
             "KOWX712/KernelSU"
           )
 
-          APK_URL=""
-          VERSION_TAG=""
-          FOUND_OWNER=""
+          COUNT=0
 
           for repo in "${REPOS[@]}"; do
+            echo "----------------------------------------"
             echo "[*] Checking latest release in: $repo"
+            OWNER="${repo%%/*}"
+            
+            # Gọi API lấy latest release
             API_URL="https://api.github.com/repos/${repo}/releases/latest"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
 
-            # Trích xuất tag_name và browser_download_url của file .apk
-            DOWNLOAD_URL=$(echo "$DATA" | jq -r '.assets[]? | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
-            TAG=$(echo "$DATA" | jq -r '.tag_name // empty')
+            # Trích xuất download URL của APK và tag name
+            APK_URL=$(echo "$DATA" | jq -r '.assets[]? | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+            VERSION_TAG=$(echo "$DATA" | jq -r '.tag_name // empty')
 
-            if [ -n "$DOWNLOAD_URL" ] && [ "$DOWNLOAD_URL" != "null" ]; then
-              APK_URL="$DOWNLOAD_URL"
-              VERSION_TAG="$TAG"
-              FOUND_OWNER="${repo%%/*}"
-              echo "✅ Found APK in $repo ($VERSION_TAG): $APK_URL"
-              break
+            # Nếu /releases/latest không có APK (ví dụ bản phát hành là pre-release), kiểm tra danh sách releases gần nhất
+            if [ -z "$APK_URL" ] \vert{}\vert{} [ "$APK_URL" = "null" ]; then
+              echo "[!] Not found in 'latest', scanning recent releases for $repo..."
+              API_URL="https://api.github.com/repos/${repo}/releases"
+              DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
+              
+              APK_INFO=$(echo "$DATA" | jq -r '
+                [.[] | {tag: .tag_name, url: (.assets[]? | select(.name | endswith(".apk")) | .browser_download_url)}] 
+                | map(select(.url != null)) | first // empty
+              ')
+              
+              if [ -n "$APK_INFO" ]; then
+                APK_URL=$(echo "$APK_INFO" | jq -r '.url')
+                VERSION_TAG=$(echo "$APK_INFO" | jq -r '.tag')
+              fi
+            fi
+
+            # Tải file nếu tìm thấy
+            if [ -n "$APK_URL" ] && [ "$APK_URL" != "null" ]; then
+              FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
+              echo "⬇️ Downloading from $repo ($VERSION_TAG) -> apk_output/$FILE_NAME"
+              
+              curl -fLSs -o "apk_output/$FILE_NAME" "$APK_URL" || wget -q -O "apk_output/$FILE_NAME" "$APK_URL"
+              
+              if [ -s "apk_output/$FILE_NAME" ]; then
+                echo "✅ Saved: apk_output/$FILE_NAME"
+                COUNT=$((COUNT + 1))
+              else
+                echo "⚠️ Download failed or empty file for $repo"
+              fi
+            else
+              echo "❌ No APK found for $repo"
             fi
           done
 
-          if [ -z "$APK_URL" ]; then
-            echo "❌ Failed to locate APK in any repository!"
+          echo "----------------------------------------"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ No APKs downloaded from any repository!"
             exit 1
           fi
 
-          FILE_NAME="${FOUND_OWNER}_Manager_${VERSION_TAG}.apk"
-          echo "[*] Downloading to $FILE_NAME..."
-          curl -fLSs -o "$FILE_NAME" "$APK_URL" || wget -q -O "$FILE_NAME" "$APK_URL"
+          echo "✅ Total APKs downloaded: $COUNT"
+          RELEASE_TAG="KSU_Managers_$(date +'%Y%m%d_%H%M%S')"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
 
-          
-          # Check if file exists and is not empty
-          if [ -s "$FILE_NAME" ]; then
-            echo "APK_FILE=$FILE_NAME" >> $GITHUB_ENV
-            echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-            echo "FOUND_OWNER=$FOUND_OWNER" >> $GITHUB_ENV
-            echo "✅ Download complete: $FILE_NAME"
-          else
-            echo "❌ Failed to download APK!"
-            exit 1
-          fi
-
-      - name: "📦 Upload APK as Action Artifact"
+      - name: "📦 Upload APKs as Action Artifact"
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APK_FILE }}
-          path: ${{ env.APK_FILE }}
+          name: KernelSU_Managers_All
+          path: apk_output/*.apk
           retention-days: 7
 
       - name: "🚀 Publish to GitHub Release"
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.VERSION_TAG }}
-          name: "${{ env.FOUND_OWNER }} Manager${{ env.VERSION_TAG }}"
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
           body: |
-            ### 🔥 EXTREME++ Manager
-            - **Source:** `${{ env.FOUND_OWNER }}`
-            - **Version:** `${{ env.VERSION_TAG }}`
-            - **Device:** POCO F4 (munch)
-          files: ${{ env.APK_FILE }}
+            ### 📦 KernelSU Managers Collection
+            Tự động tải về từ tất cả các repository:
+            - `rsuntk/KernelSU`
+            - `tiann/KernelSU`
+            - `ReSukiSU/ReSukiSU`
+            - `backslashxx/KernelSU`
+            - `KOWX712/KernelSU`
+          files: apk_output/*.apk
           draft: false
           prerelease: false
         env:
