@@ -61,7 +61,7 @@ jobs:
             VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
 
             if [ -n "$APK_URL" ]; then
-              if [[ "$repo" == "Baka-SU/BakaSU" ]] \vert{}\vert{} [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+              if [[ "$repo" == "Baka-SU/BakaSU" ]] || [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
                 FILE_NAME="$RAW_FILE_NAME"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
