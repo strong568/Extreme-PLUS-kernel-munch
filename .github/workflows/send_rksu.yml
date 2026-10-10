@@ -74,7 +74,7 @@ jobs:
               # Fallback nếu tên release asset không chứa tiền tố cụ thể
               if [ -z "$BAKA_REL_URL" ] && [ -z "$RESUKI_REL_URL" ]; then
                 GENERIC_APK=$(echo "$DATA" | jq -r '
-                  [ .[].assets[]? | select(.name | test("\\.apk$"; "i")) ] | first // empty
+                  [ .[].assets[]? | select(.name | test("arm64.*\\.apk$|\\.apk$"; "i")) ] | first // empty
                 ')
                 GEN_URL=$(echo "$GENERIC_APK" | jq -r '.browser_download_url // empty')
                 GEN_NAME=$(echo "$GENERIC_APK" | jq -r '.name // empty')
@@ -127,7 +127,7 @@ jobs:
           done
 
           # ----------------------------------------------------
-          # 2. Lấy 3 kết quả APK Action từ Baka-SU/BakaSU:
+          # 2. Lấy 3 kết quả APK Action từ Baka-SU/BakaSU (Chỉ ARM64):
           #    - BakaSU (Main/Master)
           #    - BakaSU-PR (Pull Request)
           #    - ReSukiSU (Branch / Workflow ReSukiSU)
@@ -204,12 +204,22 @@ jobs:
                 mkdir -p "ext_${PREFIX}_${ART_NAME}"
                 unzip -q -o "temp_${PREFIX}_${ART_NAME}.zip" -d "ext_${PREFIX}_${ART_NAME}/"
 
-                find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | while read -r apk_path; do
-                  local RAW_NAME=$(basename "$apk_path")
+                # CHỈ LỌC DUY NHẤT ARM64 (ưu tiên arm64-v8a, loại bỏ debug/v7a/riscv/x86/universal)
+                local CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
+                
+                # Fallback nếu không có đuôi -release
+                if [ -z "$CHOSEN_APK" ]; then
+                  CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                fi
+
+                if [ -n "$CHOSEN_APK" ]; then
+                  local RAW_NAME=$(basename "$CHOSEN_APK")
                   local FINAL_NAME="${PREFIX}_${RAW_NAME}"
-                  cp "$apk_path" "apk_output/$FINAL_NAME"
-                  echo "✅ Saved: apk_output/$FINAL_NAME"
-                done
+                  cp "$CHOSEN_APK" "apk_output/$FINAL_NAME"
+                  echo "✅ Saved (ARM64 only): apk_output/$FINAL_NAME"
+                else
+                  echo "⚠️ No ARM64 APK found in artifact: $ART_NAME"
+                fi
 
                 rm -rf "temp_${PREFIX}_${ART_NAME}.zip" "ext_${PREFIX}_${ART_NAME}"
               fi
@@ -223,7 +233,7 @@ jobs:
           COUNT=$(find apk_output -type f -name "*.apk" | wc -l)
 
           # ----------------------------------------------------
-          # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts
+          # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts (Chỉ ARM64)
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching latest artifact from SukiSU-Ultra/SukiSU-Ultra actions..."
@@ -261,14 +271,14 @@ jobs:
                 mkdir -p sukisu_extracted
                 unzip -q -o "sukisu_temp.zip" -d sukisu_extracted/
 
-                FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | grep -iE "arm64-v8a|arm64" | head -n 1)
                 [ -z "$FOUND_SUKI_APK" ] && FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | head -n 1)
 
                 if [ -n "$FOUND_SUKI_APK" ]; then
                   ORIGINAL_NAME=$(basename "$FOUND_SUKI_APK")
                   TARGET_NAME="Action_SukiSU_${ORIGINAL_NAME}"
                   cp "$FOUND_SUKI_APK" "apk_output/$TARGET_NAME"
-                  echo "✅ Saved SukiSU Action APK: apk_output/$TARGET_NAME"
+                  echo "✅ Saved SukiSU Action APK (ARM64): apk_output/$TARGET_NAME"
                 else
                   echo "⚠️ No APK file found inside SukiSU artifact zip"
                 fi
@@ -368,13 +378,13 @@ jobs:
           name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
           body: |
             ### 📦 KernelSU Managers Collection
-            Tải tự động đầy đủ các biến thể Release và CI:
+            Tải tự động đầy đủ các biến thể Release và CI (Chỉ ARM64):
             - **Official:** `tiann/KernelSU`
             - **Rissu / SuSFS:** `rsuntk/KernelSU`
-            - **BakaSU (Release & CI):** `Baka-SU/BakaSU`
-            - **BakaSU-PR (CI PR):** `Baka-SU/BakaSU`
-            - **ReSukiSU (Release & CI):** `Baka-SU/BakaSU`
-            - **SukiSU-Ultra (Release & CI):** `SukiSU-Ultra/SukiSU-Ultra`
+            - **BakaSU (Release & CI ARM64):** `Baka-SU/BakaSU`
+            - **BakaSU-PR (CI ARM64):** `Baka-SU/BakaSU`
+            - **ReSukiSU (Release & CI ARM64):** `Baka-SU/BakaSU`
+            - **SukiSU-Ultra (Release & CI ARM64):** `SukiSU-Ultra/SukiSU-Ultra`
             - **Backslashxx:** `backslashxx/KernelSU`
             - **Next:** `KernelSU-Next/KernelSU-Next`
             - **KOWX712:** `KOWX712/KernelSU` (Action Artifact mới nhất)
