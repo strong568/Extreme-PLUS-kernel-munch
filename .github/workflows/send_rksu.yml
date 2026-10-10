@@ -53,10 +53,10 @@ jobs:
               ')
 
               RESUKI_REL_URL=$(echo "$DATA" | jq -r '
-                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$\vert{}ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
+                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
               ')
               RESUKI_REL_NAME=$(echo "$DATA" | jq -r '
-                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$\vert{}ksu.*\\.apk$"; "i")) ] | first | .name // empty
+                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .name // empty
               ')
 
               if [ -n "$BAKA_REL_URL" ]; then
