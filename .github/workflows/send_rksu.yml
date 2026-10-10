@@ -37,13 +37,13 @@ jobs:
           # ----------------------------------------------------
           for repo in "${REPOS[@]}"; do
             echo "========================================"
-            echo "[*] Processing: $repo"
+            echo "[*] Processing Release: $repo"
             OWNER="${repo%%/*}"
             
             API_URL="https://api.github.com/repos/${repo}/releases"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
 
-            # Ưu tiên arm64-v8a cho Poco F4, fallback về universal hoặc apk bất kỳ
+            # Ưu tiên arm64-v8a cho POCO F4, fallback về universal hoặc apk bất kỳ
             ASSET_INFO=$(echo "$DATA" | jq -r '
               [ .[] | {
                   tag: .tag_name, 
@@ -61,8 +61,10 @@ jobs:
             VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
 
             if [ -n "$APK_URL" ]; then
-              if [[ "$repo" == "Baka-SU/BakaSU" ]] || [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
-                FILE_NAME="$RAW_FILE_NAME"
+              if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
+                FILE_NAME="Release_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+                FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
               else
@@ -78,12 +80,126 @@ jobs:
                 COUNT=$((COUNT + 1))
               fi
             else
-              echo "⚠️ No APK asset found in $repo"
+              echo "⚠️ No APK asset found in Release of $repo"
             fi
           done
 
           # ----------------------------------------------------
-          # 2. Lấy APK mới nhất từ KOWX712 Actions Artifacts
+          # 2. Lấy APK mới nhất từ Baka-SU/BakaSU Actions Artifacts
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "[*] Fetching latest artifact from Baka-SU/BakaSU actions..."
+
+          BAKA_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+
+          if [ -n "$BAKA_RUN_ID" ]; then
+            echo "[*] Found latest BakaSU Run ID: $BAKA_RUN_ID"
+
+            BAKA_ARTIFACTS_DATA=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${BAKA_RUN_ID}/artifacts")
+
+            BAKA_ARTIFACT_DOWNLOAD_URL=$(echo "$BAKA_ARTIFACTS_DATA" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk|bakasu"; "i")) ] | first | .archive_download_url // empty
+            ')
+
+            if [ -n "$BAKA_ARTIFACT_DOWNLOAD_URL" ]; then
+              echo "[*] Downloading BakaSU action artifact..."
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "bakasu_temp.zip" \
+                "$BAKA_ARTIFACT_DOWNLOAD_URL"
+
+              if [ -s "bakasu_temp.zip" ]; then
+                mkdir -p bakasu_extracted
+                unzip -q -o "bakasu_temp.zip" -d bakasu_extracted/
+
+                FOUND_BAKA_APK=$(find bakasu_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                [ -z "$FOUND_BAKA_APK" ] && FOUND_BAKA_APK=$(find bakasu_extracted -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_BAKA_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_BAKA_APK")
+                  TARGET_NAME="Action_${ORIGINAL_NAME}"
+                  cp "$FOUND_BAKA_APK" "apk_output/$TARGET_NAME"
+                  echo "✅ Saved BakaSU Action APK: apk_output/$TARGET_NAME"
+                  COUNT=$((COUNT + 1))
+                else
+                  echo "⚠️ No APK found inside BakaSU artifact zip"
+                fi
+                rm -rf bakasu_temp.zip bakasu_extracted
+              fi
+            else
+              echo "⚠️ No matching artifacts found for BakaSU Run ID $BAKA_RUN_ID"
+            fi
+          else
+            echo "⚠️ Could not retrieve successful runs for Baka-SU/BakaSU"
+          fi
+
+          # ----------------------------------------------------
+          # 3. Lấy APK mới nhất từ SukiSU-Ultra/SukiSU-Ultra Actions Artifacts
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "[*] Fetching latest artifact from SukiSU-Ultra actions..."
+
+          SUKI_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+
+          if [ -n "$SUKI_RUN_ID" ]; then
+            echo "[*] Found latest SukiSU-Ultra Run ID: $SUKI_RUN_ID"
+
+            SUKI_ARTIFACTS_DATA=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs/${SUKI_RUN_ID}/artifacts")
+
+            SUKI_ARTIFACT_DOWNLOAD_URL=$(echo "$SUKI_ARTIFACTS_DATA" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk|sukisu"; "i")) ] | first | .archive_download_url // empty
+            ')
+
+            if [ -n "$SUKI_ARTIFACT_DOWNLOAD_URL" ]; then
+              echo "[*] Downloading SukiSU-Ultra action artifact..."
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "sukisu_temp.zip" \
+                "$SUKI_ARTIFACT_DOWNLOAD_URL"
+
+              if [ -s "sukisu_temp.zip" ]; then
+                mkdir -p sukisu_extracted
+                unzip -q -o "sukisu_temp.zip" -d sukisu_extracted/
+
+                FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                [ -z "$FOUND_SUKI_APK" ] && FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_SUKI_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_SUKI_APK")
+                  TARGET_NAME="Action_SukiSU_${ORIGINAL_NAME}"
+                  cp "$FOUND_SUKI_APK" "apk_output/$TARGET_NAME"
+                  echo "✅ Saved SukiSU Action APK: apk_output/$TARGET_NAME"
+                  COUNT=$((COUNT + 1))
+                else
+                  echo "⚠️ No APK found inside SukiSU-Ultra artifact zip"
+                fi
+                rm -rf sukisu_temp.zip sukisu_extracted
+              fi
+            else
+              echo "⚠️ No matching artifacts found for SukiSU-Ultra Run ID $SUKI_RUN_ID"
+            fi
+          else
+            echo "⚠️ Could not retrieve successful runs for SukiSU-Ultra"
+          fi
+
+          # ----------------------------------------------------
+          # 4. Lấy APK mới nhất từ KOWX712 Actions Artifacts
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching latest artifact from KOWX712/KernelSU actions..."
@@ -102,16 +218,12 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/KOWX712/KernelSU/actions/runs/${KOWX_RUN_ID}/artifacts")
 
-            # Chỉ lấy DUY NHẤT 1 artifact đầu tiên khớp điều kiện (dùng first)
             ARTIFACT_DOWNLOAD_URL=$(echo "$ARTIFACTS_DATA" | jq -r '
               [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .archive_download_url // empty
             ')
-            ARTIFACT_NAME=$(echo "$ARTIFACTS_DATA" | jq -r '
-              [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .name // empty
-            ')
 
             if [ -n "$ARTIFACT_DOWNLOAD_URL" ]; then
-              echo "[*] Downloading artifact: $ARTIFACT_NAME..."
+              echo "[*] Downloading KOWX artifact..."
               curl -fLSs \
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
@@ -122,7 +234,6 @@ jobs:
                 mkdir -p kowx_extracted
                 unzip -q -o "kowx_temp.zip" -d kowx_extracted/
                 
-                # Tìm file apk sau khi giải nén (ưu tiên arm64)
                 FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
                 [ -z "$FOUND_KOWX_APK" ] && FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | head -n 1)
 
@@ -146,9 +257,8 @@ jobs:
             echo "⚠️ Could not retrieve any successful runs for KOWX712/KernelSU"
           fi
 
-
           # ----------------------------------------------------
-          # 3. Tổng kết số lượng APK
+          # 5. Tổng kết số lượng APK
           # ----------------------------------------------------
           echo "========================================"
           echo "Total APKs fetched: $COUNT"
@@ -175,14 +285,16 @@ jobs:
           name: "KernelSU Managers Bundle (${{ env.RELEASE_TAG }})"
           body: |
             ### 📦 KernelSU Managers Collection
-            Tải tự động đầy đủ 7 biến thể:
+            Tải tự động đầy đủ các biến thể Release và CI:
             - **Official:** `tiann/KernelSU`
             - **Rissu / SuSFS:** `rsuntk/KernelSU`
-            - **ReSukiSU:** `Baka-SU/BakaSU`
-            - **SukiSU-Ultra:** `SukiSU-Ultra/SukiSU-Ultra`
+            - **ReSukiSU / BakaSU (Release):** `Baka-SU/BakaSU`
+            - **ReSukiSU / BakaSU (Action CI):** `Baka-SU/BakaSU` (Artifact mới nhất)
+            - **SukiSU-Ultra (Release):** `SukiSU-Ultra/SukiSU-Ultra`
+            - **SukiSU-Ultra (Action CI):** `SukiSU-Ultra/SukiSU-Ultra` (Artifact mới nhất)
             - **Backslashxx:** `backslashxx/KernelSU`
             - **Next:** `KernelSU-Next/KernelSU-Next`
-            - **KOWX712:** `KOWX712/KernelSU` (Latest Action Artifact)
+            - **KOWX712:** `KOWX712/KernelSU` (Action Artifact mới nhất)
           files: apk_output/*.apk
           draft: false
           prerelease: false
