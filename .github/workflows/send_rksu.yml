@@ -144,34 +144,40 @@ jobs:
           # ----------------------------------------------------
           # 3. Lấy APK mới nhất từ SukiSU-Ultra/SukiSU-Ultra Actions Artifacts
           # ----------------------------------------------------
+          # Fetch APK từ SukiSU-Ultra Actions Artifacts
+          # ----------------------------------------------------
           echo "========================================"
-          echo "[*] Fetching latest artifact from SukiSU-Ultra actions..."
+          echo "[*] Fetching latest artifact from SukiSU-Ultra/SukiSU-Ultra actions..."
 
+          # Lấy danh sách 5 run thành công gần nhất và chọn run liên quan tới build/manager
           SUKI_RUN_ID=$(curl -sL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=1" \
-            | jq -r '.workflow_runs[0].id // empty')
+            "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=5" \
+            | jq -r '
+              ( [ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) //
+              .workflow_runs[0].id // empty
+            ')
 
           if [ -n "$SUKI_RUN_ID" ]; then
-            echo "[*] Found latest SukiSU-Ultra Run ID: $SUKI_RUN_ID"
+            echo "[*] Target SukiSU-Ultra Run ID: $SUKI_RUN_ID"
 
-            SUKI_ARTIFACTS_DATA=$(curl -sL \
+            SUKI_ARTIFACTS=$(curl -sL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs/${SUKI_RUN_ID}/artifacts")
 
-            SUKI_ARTIFACT_DOWNLOAD_URL=$(echo "$SUKI_ARTIFACTS_DATA" | jq -r '
+            SUKI_DL_URL=$(echo "$SUKI_ARTIFACTS" | jq -r '
               [ .artifacts[] | select(.name | test("manager|apk|sukisu"; "i")) ] | first | .archive_download_url // empty
             ')
 
-            if [ -n "$SUKI_ARTIFACT_DOWNLOAD_URL" ]; then
-              echo "[*] Downloading SukiSU-Ultra action artifact..."
+            if [ -n "$SUKI_DL_URL" ]; then
+              echo "[*] Downloading SukiSU-Ultra artifact..."
               curl -fLSs \
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
                 -o "sukisu_temp.zip" \
-                "$SUKI_ARTIFACT_DOWNLOAD_URL"
+                "$SUKI_DL_URL"
 
               if [ -s "sukisu_temp.zip" ]; then
                 mkdir -p sukisu_extracted
@@ -187,16 +193,17 @@ jobs:
                   echo "✅ Saved SukiSU Action APK: apk_output/$TARGET_NAME"
                   COUNT=$((COUNT + 1))
                 else
-                  echo "⚠️ No APK found inside SukiSU-Ultra artifact zip"
+                  echo "⚠️ No APK file found inside SukiSU artifact zip"
                 fi
                 rm -rf sukisu_temp.zip sukisu_extracted
               fi
             else
-              echo "⚠️ No matching artifacts found for SukiSU-Ultra Run ID $SUKI_RUN_ID"
+              echo "⚠️ No matching manager/apk artifact in Run ID $SUKI_RUN_ID"
             fi
           else
-            echo "⚠️ Could not retrieve successful runs for SukiSU-Ultra"
+            echo "⚠️ Could not retrieve any valid workflow runs for SukiSU-Ultra"
           fi
+
 
           # ----------------------------------------------------
           # 4. Lấy APK mới nhất từ KOWX712 Actions Artifacts
