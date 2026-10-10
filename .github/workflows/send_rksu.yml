@@ -43,6 +43,50 @@ jobs:
             API_URL="https://api.github.com/repos/${repo}/releases"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
 
+            # Xử lý tách riêng BakaSU và ReSukiSU nếu ở repo Baka-SU/BakaSU
+            if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
+              BAKA_REL_URL=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
+              ')
+              BAKA_REL_NAME=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .name // empty
+              ')
+
+              RESUKI_REL_URL=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$\vert{}ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
+              ')
+              RESUKI_REL_NAME=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$\vert{}ksu.*\\.apk$"; "i")) ] | first | .name // empty
+              ')
+
+              if [ -n "$BAKA_REL_URL" ]; then
+                echo "⬇️ Downloading: Release_BakaSU_${BAKA_REL_NAME}"
+                curl -fLSs -o "apk_output/Release_BakaSU_${BAKA_REL_NAME}" "$BAKA_REL_URL"
+                COUNT=$((COUNT + 1))
+              fi
+
+              if [ -n "$RESUKI_REL_URL" ]; then
+                echo "⬇️ Downloading: Release_ReSukiSU_${RESUKI_REL_NAME}"
+                curl -fLSs -o "apk_output/Release_ReSukiSU_${RESUKI_REL_NAME}" "$RESUKI_REL_URL"
+                COUNT=$((COUNT + 1))
+              fi
+
+              # Fallback nếu tên release asset không chứa tiền tố cụ thể
+              if [ -z "$BAKA_REL_URL" ] && [ -z "$RESUKI_REL_URL" ]; then
+                GENERIC_APK=$(echo "$DATA" | jq -r '
+                  [ .[].assets[]? | select(.name | test("\\.apk$"; "i")) ] | first // empty
+                ')
+                GEN_URL=$(echo "$GENERIC_APK" | jq -r '.browser_download_url // empty')
+                GEN_NAME=$(echo "$GENERIC_APK" | jq -r '.name // empty')
+                if [ -n "$GEN_URL" ]; then
+                  echo "⬇️ Downloading generic BakaSU release: $GEN_NAME"
+                  curl -fLSs -o "apk_output/Release_${GEN_NAME}" "$GEN_URL"
+                  COUNT=$((COUNT + 1))
+                fi
+              fi
+              continue
+            fi
+
             # Ưu tiên arm64-v8a cho POCO F4, fallback về universal hoặc apk bất kỳ
             ASSET_INFO=$(echo "$DATA" | jq -r '
               [ .[] | {
@@ -61,9 +105,7 @@ jobs:
             VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
 
             if [ -n "$APK_URL" ]; then
-              if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
-                FILE_NAME="Release_${RAW_FILE_NAME}"
-              elif [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+              if [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
                 FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
@@ -85,71 +127,107 @@ jobs:
           done
 
           # ----------------------------------------------------
-          # 2. Lấy APK mới nhất từ Baka-SU/BakaSU Actions Artifacts
+          # 2. Lấy 3 kết quả APK Action từ Baka-SU/BakaSU:
+          #    - BakaSU (Main/Master)
+          #    - BakaSU-PR (Pull Request)
+          #    - ReSukiSU (Branch / Workflow ReSukiSU)
           # ----------------------------------------------------
           echo "========================================"
-          echo "[*] Fetching latest artifact from Baka-SU/BakaSU actions..."
+          echo "[*] Fetching Actions Runs from Baka-SU/BakaSU..."
 
-          BAKA_RUN_ID=$(curl -sL \
+          BAKA_RUNS_JSON=$(curl -sL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=1" \
-            | jq -r '.workflow_runs[0].id // empty')
+            "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-          if [ -n "$BAKA_RUN_ID" ]; then
-            echo "[*] Found latest BakaSU Run ID: $BAKA_RUN_ID"
+          # 1. Run ID của BakaSU-PR
+          BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+            [ .workflow_runs[] | select(
+                ((.event == "pull_request") or (.head_branch | test("pr|pull"; "i")) or (.display_title | test("pr|pull request"; "i"))) and
+                (.name | test("build.*manager|manager|ci"; "i"))
+            ) ] | first | .id // empty
+          ')
 
-            BAKA_ARTIFACTS_DATA=$(curl -sL \
+          # 2. Run ID của ReSukiSU
+          RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+            [ .workflow_runs[] | select(
+                ((.head_branch | test("resuki"; "i")) or (.name | test("resuki"; "i")) or (.display_title | test("resuki"; "i"))) and
+                (.name | test("build.*manager|manager|ci"; "i"))
+            ) ] | first | .id // empty
+          ')
+
+          # 3. Run ID của BakaSU Main
+          BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+            [ .workflow_runs[] | select(
+                (.event != "pull_request") and
+                (.head_branch | test("main|master"; "i")) and
+                ((.head_branch | test("resuki"; "i") | not) and (.display_title | test("resuki"; "i") | not)) and
+                (.name | test("build.*manager|manager|ci"; "i"))
+            ) ] | first | .id // empty
+          ')
+
+          # Fallback cho Main nếu không khớp cụ thể branch
+          if [ -z "$BAKASU_MAIN_RUN_ID" ]; then
+            BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+              [ .workflow_runs[] | select(
+                  .id != "'"$BAKASU_PR_RUN_ID"'" and .id != "'"$RESUKISU_RUN_ID"'" and
+                  (.name | test("build.*manager|manager|ci"; "i"))
+              ) ] | first | .id // empty
+            ')
+          fi
+
+          echo "[*] Detected Runs: Main=${BAKASU_MAIN_RUN_ID:-None}, PR=${BAKASU_PR_RUN_ID:-None}, ReSukiSU=${RESUKISU_RUN_ID:-None}"
+
+          fetch_bakasu_action() {
+            local R_ID="$1"
+            local PREFIX="$2"
+
+            [ -z "$R_ID" ] && return 0
+
+            echo "[⬇️] Processing $PREFIX (Run ID:$R_ID)..."
+            local ART_JSON=$(curl -sL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${BAKA_RUN_ID}/artifacts")
+              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${R_ID}/artifacts")
 
-            BAKA_ARTIFACT_DOWNLOAD_URL=$(echo "$BAKA_ARTIFACTS_DATA" | jq -r '
-              [ .artifacts[] | select(.name | test("manager|apk|bakasu"; "i")) ] | first | .archive_download_url // empty
-            ')
+            echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk"; "i"))' | while read -r art; do
+              local ART_NAME=$(echo "$art" | jq -r '.name')
+              local ART_URL=$(echo "$art" | jq -r '.archive_download_url')
 
-            if [ -n "$BAKA_ARTIFACT_DOWNLOAD_URL" ]; then
-              echo "[*] Downloading BakaSU action artifact..."
               curl -fLSs \
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H "Accept: application/vnd.github+json" \
-                -o "bakasu_temp.zip" \
-                "$BAKA_ARTIFACT_DOWNLOAD_URL"
+                -o "temp_${PREFIX}_${ART_NAME}.zip" \
+                "$ART_URL"
 
-              if [ -s "bakasu_temp.zip" ]; then
-                mkdir -p bakasu_extracted
-                unzip -q -o "bakasu_temp.zip" -d bakasu_extracted/
+              if [ -s "temp_${PREFIX}_${ART_NAME}.zip" ]; then
+                mkdir -p "ext_${PREFIX}_${ART_NAME}"
+                unzip -q -o "temp_${PREFIX}_${ART_NAME}.zip" -d "ext_${PREFIX}_${ART_NAME}/"
 
-                FOUND_BAKA_APK=$(find bakasu_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
-                [ -z "$FOUND_BAKA_APK" ] && FOUND_BAKA_APK=$(find bakasu_extracted -type f -name "*.apk" | head -n 1)
+                find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | while read -r apk_path; do
+                  local RAW_NAME=$(basename "$apk_path")
+                  local FINAL_NAME="${PREFIX}_${RAW_NAME}"
+                  cp "$apk_path" "apk_output/$FINAL_NAME"
+                  echo "✅ Saved: apk_output/$FINAL_NAME"
+                done
 
-                if [ -n "$FOUND_BAKA_APK" ]; then
-                  ORIGINAL_NAME=$(basename "$FOUND_BAKA_APK")
-                  TARGET_NAME="Action_${ORIGINAL_NAME}"
-                  cp "$FOUND_BAKA_APK" "apk_output/$TARGET_NAME"
-                  echo "✅ Saved BakaSU Action APK: apk_output/$TARGET_NAME"
-                  COUNT=$((COUNT + 1))
-                else
-                  echo "⚠️ No APK found inside BakaSU artifact zip"
-                fi
-                rm -rf bakasu_temp.zip bakasu_extracted
+                rm -rf "temp_${PREFIX}_${ART_NAME}.zip" "ext_${PREFIX}_${ART_NAME}"
               fi
-            else
-              echo "⚠️ No matching artifacts found for BakaSU Run ID $BAKA_RUN_ID"
-            fi
-          else
-            echo "⚠️ Could not retrieve successful runs for Baka-SU/BakaSU"
-          fi
+            done
+          }
+
+          fetch_bakasu_action "$BAKASU_MAIN_RUN_ID" "Action_BakaSU"
+          fetch_bakasu_action "$BAKASU_PR_RUN_ID"   "Action_BakaSU_PR"
+          fetch_bakasu_action "$RESUKISU_RUN_ID"    "Action_ReSukiSU"
+
+          COUNT=$(find apk_output -type f -name "*.apk" | wc -l)
 
           # ----------------------------------------------------
-          # 3. Lấy APK mới nhất từ SukiSU-Ultra/SukiSU-Ultra Actions Artifacts
-          # ----------------------------------------------------
-          # Fetch APK từ SukiSU-Ultra Actions Artifacts
+          # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching latest artifact from SukiSU-Ultra/SukiSU-Ultra actions..."
 
-          # Lấy danh sách 5 run thành công gần nhất và chọn run liên quan tới build/manager
           SUKI_RUN_ID=$(curl -sL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -191,7 +269,6 @@ jobs:
                   TARGET_NAME="Action_SukiSU_${ORIGINAL_NAME}"
                   cp "$FOUND_SUKI_APK" "apk_output/$TARGET_NAME"
                   echo "✅ Saved SukiSU Action APK: apk_output/$TARGET_NAME"
-                  COUNT=$((COUNT + 1))
                 else
                   echo "⚠️ No APK file found inside SukiSU artifact zip"
                 fi
@@ -203,7 +280,6 @@ jobs:
           else
             echo "⚠️ Could not retrieve any valid workflow runs for SukiSU-Ultra"
           fi
-
 
           # ----------------------------------------------------
           # 4. Lấy APK mới nhất từ KOWX712 Actions Artifacts
@@ -249,7 +325,6 @@ jobs:
                   TARGET_NAME="KOWX_${ORIGINAL_NAME}"
                   cp "$FOUND_KOWX_APK" "apk_output/$TARGET_NAME"
                   echo "✅ Saved KOWX APK: apk_output/$TARGET_NAME"
-                  COUNT=$((COUNT + 1))
                 else
                   echo "⚠️ No APK file found inside KOWX artifact zip"
                 fi
@@ -268,6 +343,7 @@ jobs:
           # 5. Tổng kết số lượng APK
           # ----------------------------------------------------
           echo "========================================"
+          COUNT=$(find apk_output -type f -name "*.apk" | wc -l)
           echo "Total APKs fetched: $COUNT"
 
           if [ "$COUNT" -eq 0 ]; then
@@ -295,10 +371,10 @@ jobs:
             Tải tự động đầy đủ các biến thể Release và CI:
             - **Official:** `tiann/KernelSU`
             - **Rissu / SuSFS:** `rsuntk/KernelSU`
-            - **ReSukiSU / BakaSU (Release):** `Baka-SU/BakaSU`
-            - **ReSukiSU / BakaSU (Action CI):** `Baka-SU/BakaSU` (Artifact mới nhất)
-            - **SukiSU-Ultra (Release):** `SukiSU-Ultra/SukiSU-Ultra`
-            - **SukiSU-Ultra (Action CI):** `SukiSU-Ultra/SukiSU-Ultra` (Artifact mới nhất)
+            - **BakaSU (Release & CI):** `Baka-SU/BakaSU`
+            - **BakaSU-PR (CI PR):** `Baka-SU/BakaSU`
+            - **ReSukiSU (Release & CI):** `Baka-SU/BakaSU`
+            - **SukiSU-Ultra (Release & CI):** `SukiSU-Ultra/SukiSU-Ultra`
             - **Backslashxx:** `backslashxx/KernelSU`
             - **Next:** `KernelSU-Next/KernelSU-Next`
             - **KOWX712:** `KOWX712/KernelSU` (Action Artifact mới nhất)
