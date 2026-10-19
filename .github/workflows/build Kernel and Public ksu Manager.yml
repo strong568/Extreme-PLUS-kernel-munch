@@ -14,10 +14,19 @@ on:
           - Gaming
         default: all
       build_ksu:
-        description: 'Integrate ReSukiSU Multi-Manager & Fetch All KSU Manager APKs'
+        description: 'Integrate KowSU + MidoriSU + ReSukiSU Multi-Manager & Fetch All KSU Manager APKs'
         required: true
         type: boolean
         default: true
+      ksu_flavor:
+        description: 'Select KernelSU Core Base (All support Multi-Manager APKs)'
+        required: true
+        type: choice
+        options:
+          - ReSukiSU-MultiManager
+          - MidoriSU
+          - KowSU
+        default: ReSukiSU-MultiManager
 
 permissions:
   contents: write # Quyền tạo GitHub Release & upload assets
@@ -44,12 +53,10 @@ jobs:
             squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip \
             device-tree-compiler libfdt-dev cpio kmod pahole dwarves jq unzip wget
 
-          # Đảm bảo lệnh 'python' luôn trỏ về python3
           if ! command -v python &> /dev/null; then
             sudo ln -sf /usr/bin/python3 /usr/bin/python
           fi
 
-          # Cấu hình Git giả lập (tránh lỗi khi setup.sh của ReSukiSU hoặc Baseband-guard chạy git apply/commit)
           git config --global user.name "PandeyJI-9"
           git config --global user.email "pandeyji@extremeplusplus.dev"
           git config --global color.ui false
@@ -66,7 +73,7 @@ jobs:
         run: |
           git clone --depth=1 -b android17-aptusitu https://github.com/AstideLabs/android_kernel_xiaomi_sm8250 kernel
 
-      - name: "🛡️ Inject Patches & Harden build_kernel.sh (Anti-Fail Safeguards)"
+      - name: "🛡️ Inject Patches & Harden build_kernel.sh (Multi-Manager MidoriSU & KowSU)"
         run: |
           if [ -d "patches" ]; then
             cp -rf patches/* kernel/
@@ -94,7 +101,21 @@ jobs:
           sed -i 's/python3 apply-fastcharge-bypass.py/python3 apply-fastcharge-bypass.py || echo "⚠️ Fastcharge patch skipped"/g' build_kernel.sh
           sed -i 's/python3 apply-cpu-cap.py "${FREQ}"/python3 apply-cpu-cap.py "${FREQ}" || echo "⚠️ CPU cap script fallback"/g' build_kernel.sh
 
-          # 3. Đảm bảo thư mục ccache luôn tồn tại trước khi build
+          # 3. Vá trực tiếp bộ lọc apk_sign.c trong build_kernel.sh để nhận diện cả MidoriSU và KowSU
+          sed -i 's/"com.kowx712.supermanager"/"com.kowx712.supermanager") || !strcmp(pkg_buf, "me.kowx712.kernelsu") || !strcmp(pkg_buf, "com.midori.kernelsu") || !strcmp(pkg_buf, "me.midori01.kernelsu") || !strcmp(pkg_buf, "org.midorisu.midorisu") || (strstr(pkg_buf, "midori") != NULL/g' build_kernel.sh || true
+
+          # 4. Đổi nguồn setup.sh nếu người dùng chọn MidoriSU hoặc KowSU
+          if [ "${{ inputs.build_ksu }}" = "true" ]; then
+            if [ "${{ inputs.ksu_flavor }}" = "MidoriSU" ]; then
+              echo "🌿 Switching KernelSU setup script to MidoriSU (midori01/KernelSU)..."
+              sed -i -E 's|https://raw\.githubusercontent\.com/[^/]+/[^/]+/(refs/heads/)?[^/]+/kernel/setup\.sh(\|[[:space:]]*bash([[:space:]]+-s[[:space:]]+--[[:space:]]+[^[:space:]]+)?)?|https://raw.githubusercontent.com/midori01/KernelSU/refs/heads/main/kernel/setup.sh \| bash -|g' build_kernel.sh
+            elif [ "${{ inputs.ksu_flavor }}" = "KowSU" ]; then
+              echo "⚡ Switching KernelSU setup script to KowSU (KOWX712/KernelSU)..."
+              sed -i -E 's|https://raw\.githubusercontent\.com/[^/]+/[^/]+/(refs/heads/)?[^/]+/kernel/setup\.sh(\|[[:space:]]*bash([[:space:]]+-s[[:space:]]+--[[:space:]]+[^[:space:]]+)?)?|https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh \| bash -|g' build_kernel.sh
+            fi
+          fi
+
+          # 5. Đảm bảo thư mục ccache luôn tồn tại trước khi build
           mkdir -p "$HOME/.cache/ccache_mikernel"
 
       - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
@@ -115,6 +136,7 @@ jobs:
           TZ: Asia/Ho_Chi_Minh
           KBUILD_BUILD_USER: "PandeyJi"
           KBUILD_BUILD_HOST: "ExtremePlusPlus"
+          KSU_FLAVOR: "${{ inputs.ksu_flavor }}"
         run: |
           cd kernel
           TARGET_VAR="${{ inputs.variant }}"
@@ -142,6 +164,8 @@ jobs:
             "SukiSU-Ultra/SukiSU-Ultra"
             "backslashxx/KernelSU"
             "KernelSU-Next/KernelSU-Next"
+            "KOWX712/KernelSU"
+            "midori01/KernelSU"
           )
 
           COUNT=0
@@ -217,6 +241,10 @@ jobs:
                 FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
+              elif [[ "$repo" == "KOWX712/KernelSU" ]]; then
+                FILE_NAME="Release_KowSU_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "midori01/KernelSU" ]]; then
+                FILE_NAME="Release_MidoriSU_${RAW_FILE_NAME}"
               else
                 FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
               fi
@@ -369,7 +397,7 @@ jobs:
           fi
 
           # ----------------------------------------------------
-          # 4. Lấy APK mới nhất từ KOWX712 Actions Artifacts
+          # 4. Lấy APK mới nhất từ KowSU (KOWX712/KernelSU) Actions Artifacts
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching latest artifact from KOWX712/KernelSU actions..."
@@ -406,11 +434,61 @@ jobs:
 
                 if [ -n "$FOUND_KOWX_APK" ]; then
                   ORIGINAL_NAME=$(basename "$FOUND_KOWX_APK")
-                  TARGET_NAME="KOWX_${ORIGINAL_NAME}"
+                  TARGET_NAME="Action_KowSU_${ORIGINAL_NAME}"
                   cp "$FOUND_KOWX_APK" "apk_output/$TARGET_NAME"
-                  echo "✅ Saved KOWX APK: apk_output/$TARGET_NAME"
+                  echo "✅ Saved KowSU Action APK: apk_output/$TARGET_NAME"
                 fi
                 rm -rf kowx_temp.zip kowx_extracted
+              fi
+            fi
+          fi
+
+          # ----------------------------------------------------
+          # 5. Lấy APK mới nhất từ MidoriSU (midori01/KernelSU) Actions Artifacts (Chỉ ARM64)
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "[*] Fetching latest artifact from midori01/KernelSU actions..."
+
+          MIDORI_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/midori01/KernelSU/actions/runs?status=completed&conclusion=success&per_page=10" \
+            | jq -r '
+              ( [ .workflow_runs[]? | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) //
+              .workflow_runs[0].id // empty
+            ')
+
+          if [ -n "$MIDORI_RUN_ID" ]; then
+            MIDORI_ARTIFACTS=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/midori01/KernelSU/actions/runs/${MIDORI_RUN_ID}/artifacts")
+
+            MIDORI_DL_URL=$(echo "$MIDORI_ARTIFACTS" | jq -r '
+              [ .artifacts[]? | select(.name | test("manager|apk|ksu|midori"; "i")) ] | first | .archive_download_url // empty
+            ')
+
+            if [ -n "$MIDORI_DL_URL" ]; then
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "midori_temp.zip" \
+                "$MIDORI_DL_URL" || true
+
+              if [ -s "midori_temp.zip" ]; then
+                mkdir -p midori_extracted
+                unzip -q -o "midori_temp.zip" -d midori_extracted/
+
+                FOUND_MIDORI_APK=$(find midori_extracted -type f -name "*.apk" | grep -iE "arm64-v8a|arm64" | head -n 1)
+                [ -z "$FOUND_MIDORI_APK" ] && FOUND_MIDORI_APK=$(find midori_extracted -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_MIDORI_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_MIDORI_APK")
+                  TARGET_NAME="Action_MidoriSU_${ORIGINAL_NAME}"
+                  cp "$FOUND_MIDORI_APK" "apk_output/$TARGET_NAME"
+                  echo "✅ Saved MidoriSU Action APK (ARM64): apk_output/$TARGET_NAME"
+                fi
+                rm -rf midori_temp.zip midori_extracted
               fi
             fi
           fi
@@ -426,7 +504,7 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_ENV
 
           if [ "${{ inputs.build_ksu }}" = "true" ]; then
-            echo "ROOT_STATUS=⚡ Inbuilt ReSukiSU / RKSU Multi-Manager (SuSFS v2.3.0)" >> $GITHUB_ENV
+            echo "ROOT_STATUS=⚡ Inbuilt Multi-Manager (${{ inputs.ksu_flavor }} | KowSU + MidoriSU + ReSukiSU + SuSFS)" >> $GITHUB_ENV
           else
             echo "ROOT_STATUS=🛡️ Pure Clean Base (No Root)" >> $GITHUB_ENV
           fi
@@ -464,15 +542,16 @@ jobs:
             - **🚀 Gaming:** Truly 3.2GHz (`3187200 kHz`) - Pure Performance Monster
 
             ---
-            ### 📲 Included KernelSU Managers (ARM64 Collection)
+            ### 📲 Included KernelSU Managers (ARM64 Multi-Manager Collection)
             Universal signature verification patched inside `apk_sign.c` supports:
             - **Official:** `tiann/KernelSU` (`me.weishu.kernelsu`)
             - **Rissu / SuSFS:** `rsuntk/KernelSU`
             - **ReSukiSU & BakaSU (Release + CI ARM64):** `Baka-SU/BakaSU` (`org.resukisu.resukisu`, `org.bakasu.bakasu`)
             - **SukiSU-Ultra (Release + CI ARM64):** `SukiSU-Ultra/SukiSU-Ultra` (`com.sukisu.ultra`)
             - **Backslashxx:** `backslashxx/KernelSU`
-            - **KernelSU-Next:** `KernelSU-Next/KernelSU-Next`
-            - **KOWX712:** `KOWX712/KernelSU` (`com.kowx712.supermanager`)
+            - **KernelSU-Next:** `KernelSU-Next/KernelSU-Next` (`com.rifsxd.ksunext`)
+            - **KowSU (Release + CI ARM64):** `KOWX712/KernelSU` (`com.kowx712.supermanager`, `me.kowx712.kernelsu`)
+            - **MidoriSU (Release + CI ARM64):** `midori01/KernelSU` (`com.midori.kernelsu`, `me.midori01.kernelsu`)
           files: |
             kernel/EXTREME++*.zip
             apk_output/*.apk
