@@ -91,12 +91,27 @@ if ! grep -q "selinux,baseband_guard" security/Kconfig; then
 fi
 
 # ------------------------------------------
-# 3. KernelSU (RKSU / ReSukiSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup
+# 3. KernelSU (Multi-Manager: KowSU / MidoriSU / ReSukiSU with SuSFS) Setup
 # ------------------------------------------
 if [ "$ENABLE_KSU" -eq 1 ]; then
-    echo "[*] Injecting ReSukiSU / RKSU Multi-Manager (Non-GKI 4.19 with SuSFS v2.3.0) Source..."
-    # Pin to tested stable release tag v4.2.0-rc3 to avoid moving upstream breaking renames & IOCTL mismatches
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+    KSU_FLAVOR="${KSU_FLAVOR:-resukisu}"
+    echo "[*] Injecting KernelSU Multi-Manager Source (Selected Flavor: ${KSU_FLAVOR})..."
+
+    case "${KSU_FLAVOR,,}" in
+        midori|midorisu)
+            echo "[*] Fetching MidoriSU (midori01/KernelSU)..."
+            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/refs/heads/main/kernel/setup.sh" | bash -
+            ;;
+        kowsu|kowx|kowx712)
+            echo "[*] Fetching KowSU (KOWX712/KernelSU)..."
+            curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash - || \
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+            ;;
+        *)
+            echo "[*] Fetching ReSukiSU / RKSU Multi-Manager (v4.2.0-rc3)..."
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+            ;;
+    esac
 
     # Force KSU_SUSFS as default choice in drivers/kernelsu/Kconfig (Prevents Non-GKI TP hook fallback)
     if [ -f "drivers/kernelsu/Kconfig" ]; then
@@ -105,8 +120,8 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     fi
 
     # Multi-Manager Support & Universal Fallback Key Injection
-    # Guarantees that RKSU, Official KernelSU, ReSukiSU, SukiSU-Ultra, and BakaSU Manager apps
-    # are 100% recognized as manager without "Failed to update App Profile" permission errors.
+    # Guarantees that KowSU (KOWX712), MidoriSU, RKSU, Official KernelSU, ReSukiSU, SukiSU-Ultra,
+    # KernelSU-Next, and BakaSU Manager apps are 100% recognized as manager without permission errors.
     python3 -c '
 import os
 
@@ -121,7 +136,7 @@ if apk_sign_path:
         content = f.read()
 
     hook_target = "return check_v2_signature(path, signature_index);"
-    hook_replacement = """// Bulletproof Fallback: check known manager package names
+    hook_replacement = """// Bulletproof Fallback: check known manager package names (KowSU, MidoriSU, ReSukiSU, BakaSU, SukiSU, Next, Official)
     if (check_v2_signature(path, signature_index))
         return true;
     char pkg_buf[128];
@@ -131,8 +146,17 @@ if apk_sign_path:
             !strcmp(pkg_buf, "org.bakasu.bakasu") ||
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
-            !strcmp(pkg_buf, "com.resukisu")) {
-            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
+            !strcmp(pkg_buf, "me.kowx712.kernelsu") ||
+            !strcmp(pkg_buf, "com.midori.kernelsu") ||
+            !strcmp(pkg_buf, "me.midori01.kernelsu") ||
+            !strcmp(pkg_buf, "org.midorisu.midorisu") ||
+            !strcmp(pkg_buf, "com.rifsxd.ksunext") ||
+            !strcmp(pkg_buf, "me.bmax.apatch") ||
+            !strcmp(pkg_buf, "com.resukisu") ||
+            strstr(pkg_buf, "midori") != NULL ||
+            strstr(pkg_buf, "kowx") != NULL ||
+            strstr(pkg_buf, "kernelsu") != NULL) {
+            pr_info("PROJECT EXTREME+: Manager recognized by universal multi-manager package filter: %s\\n", pkg_buf);
             *signature_index = 0;
             return true;
         }
@@ -142,7 +166,7 @@ if apk_sign_path:
         content = content.replace(hook_target, hook_replacement)
         with open(apk_sign_path, "w") as f:
             f.write(content)
-        print("✅ Patched " + apk_sign_path + " with universal manager package verification")
+        print("✅ Patched " + apk_sign_path + " with universal multi-manager verification (MidoriSU + KowSU + ReSukiSU)")
     else:
         print("ℹ️ " + apk_sign_path + " already patched or target signature pattern handled")
 ' 2>/dev/null || true
@@ -152,7 +176,7 @@ if apk_sign_path:
     echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "[+] RKSU / ReSukiSU Multi-Manager Non-GKI setup finished."
+    echo "[+] Multi-Manager KernelSU (KowSU + MidoriSU + ReSukiSU) Non-GKI setup finished."
 else
     echo "[*] Ensuring Pure Clean Kernel Base (Zero embedded root hooks)..."
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
@@ -165,20 +189,17 @@ fi
 # ------------------------------------------
 echo "[*] Applying 100% Native FakeDreamer GPU Undervolt (150MHz - 670MHz) & Speed Bins..."
 
-# Pure DTS Injection: Replace kona-v2-gpu.dtsi directly with FakeDreamer source
 if [ -f "kona-v2-gpu.dtsi" ]; then
     cp -f kona-v2-gpu.dtsi arch/arm64/boot/dts/vendor/qcom/kona-v2-gpu.dtsi
     echo "[+] Copied FakeDreamer kona-v2-gpu.dtsi into kernel tree"
 fi
 
-# Ensure kona-v2.1-gpu.dtsi is stock FakeDreamer (cleanly inherits kona-v2-gpu.dtsi)
 cat > arch/arm64/boot/dts/vendor/qcom/kona-v2.1-gpu.dtsi << 'EOF'
 &msm_gpu {
 	qcom,chipid = <0x06050002>;
 };
 EOF
 echo "[+] kona-v2.1-gpu.dtsi set to pure FakeDreamer chipid override"
-
 
 
 # ------------------------------------------
@@ -230,7 +251,7 @@ else:
     print("ℹ️ EXTREME+ governor already in drivers/cpufreq/Kconfig")
 '
 
-## ------------------------------------------
+# ------------------------------------------
 # 5. Display Panel DTS Configuration (100% Stock AstideLabs Preserved)
 # ------------------------------------------
 echo "[*] Preserving 100% Native AstideLabs Display & Panel DTS (prevents black screen)..."
@@ -281,7 +302,6 @@ make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" "${DEFCONFIG}"
 # ------------------------------------------
 echo "[*] Injecting Full HyperOS / MIUI Subsystem Configs..."
 
-# 🚀 Restore Adreno TrustZone GPU Devfreq Governor & Bus Monitor
 scripts/config --file "${OUT_DIR}/.config" \
     -e PM_DEVFREQ \
     -e DEVFREQ_GOV_SIMPLE_ONDEMAND \
@@ -298,7 +318,6 @@ scripts/config --file "${OUT_DIR}/.config" \
 scripts/config --file "${OUT_DIR}/.config" -e BBG
 scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "-EXTREME++GAMING_Hyperos"
 
-# 🚀 6GB RAM & Zero-Stutter Memory Optimizations (ZRAM ZSTD)
 scripts/config --file "${OUT_DIR}/.config" \
     -e ZRAM \
     -e CRYPTO_ZSTD \
@@ -308,7 +327,6 @@ scripts/config --file "${OUT_DIR}/.config" \
     -d ZRAM_DEF_COMP_LZ4 \
     --set-str ZRAM_DEF_COMP "zstd"
 
-# 🚀 Ultra-Fast & Safe Boot (Zero-Latency Schedutil Boot, Auto-Switch to EXTREME+ Post-Boot)
 scripts/config --file "${OUT_DIR}/.config" \
     -e CPU_FREQ_GOV_SCHEDUTIL \
     --set-val SCHEDUTIL_UP_RATE_LIMIT 0 \
@@ -322,13 +340,11 @@ if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
     echo "[+] Schedutil up_rate_limit_us set to 0 in kernel/sched/cpufreq_schedutil.c for lightning boot"
 fi
 
-# Native source patches for VM & dcache tunables
 if [ -f "fs/dcache.c" ]; then
     sed -i 's/int sysctl_vfs_cache_pressure __read_mostly = [0-9]*;/int sysctl_vfs_cache_pressure __read_mostly = 50;/' fs/dcache.c
     echo "[+] Optimized sysctl_vfs_cache_pressure to 50 in fs/dcache.c for instant app launch"
 fi
 
-# 🚀 Full Xiaomi HyperOS / MIUI Kernel Subsystems
 scripts/config --file "${OUT_DIR}/.config" \
     --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
     -e PERF_CRITICAL_RT_TASK \
@@ -364,7 +380,6 @@ scripts/config --file "${OUT_DIR}/.config" \
     -d REKERNEL_NETWORK \
     -d LTO_CLANG_THIN -d CFI_CLANG
 
-# 🚀 TCP BBR Congestion Control & Lightweight Gaming Tunables (Disable I/O Stats & Debugging)
 scripts/config --file "${OUT_DIR}/.config" \
     -e TCP_CONG_BBR \
     -e DEFAULT_BBR \
@@ -380,9 +395,8 @@ scripts/config --file "${OUT_DIR}/.config" \
     -d DEBUG_KMEMLEAK \
     -d DEBUG_PREEMPT
 
-# 🚀 Root Configuration: RKSU / ReSukiSU + SuSFS v2.3.0 vs Pure Clean Base
 if [ "$ENABLE_KSU" -eq 1 ]; then
-    echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS v2.3.0 Configuration into .config..."
+    echo "[*] Injecting Full Multi-Manager KSU + SuSFS Configuration into .config..."
     scripts/config --file "${OUT_DIR}/.config" \
         -e KSU \
         -e KSU_SUSFS \
@@ -436,7 +450,6 @@ esac
 
 echo "[*] Selected Target Variant(s): ${VARIANTS_TO_BUILD[*]}"
 
-# Step 9a: Compile Shared Multi-DTB Table & DTBO
 echo "[*] Compiling Shared Multi-DTB Table & DTBO Image..."
 make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
 
@@ -450,7 +463,6 @@ if ! git clone --depth=1 https://github.com/re-noroi/anykernel3-test -b munch an
 fi
 rm -rf anykernel/.git
 
-# Copy multi-DTB table into anykernel
 if [ -f "${OUT_DIR}/arch/arm64/boot/dtb" ]; then
     cp "${OUT_DIR}/arch/arm64/boot/dtb" anykernel/dtb
     echo "[+] DTB table copied from arch/arm64/boot/dtb"
@@ -462,10 +474,8 @@ else
     echo "[+] Concatenated all compiled DTBs into anykernel/dtb"
 fi
 
-# NOTE: Stock DTBO partition is preserved 100% untouched to ensure OEM display panel calibrations & recovery work flawlessly!
 echo "[*] Skipping DTBO packaging (Stock DTBO on device is preserved)..."
 
-# Create 00-extreme-performance.sh post-boot service
 cat > anykernel/00-extreme-performance.sh << 'EOF'
 #!/system/bin/sh
 # ═══════════════════════════════════════════════════════════════
@@ -474,22 +484,16 @@ cat > anykernel/00-extreme-performance.sh << 'EOF'
 # ═══════════════════════════════════════════════════════════════
 
 (
-# Accelerate Cold Boot: Stream system APKs & ODEX files at maximum UFS 3.1 bus bandwidth (2048 KB)
 for queue in /sys/block/*/queue; do
     [ -d "$queue" ] && echo 2048 > "$queue/read_ahead_kb" 2>/dev/null || true
 done
 
-# Wait for Android framework to fully complete boot in background without blocking init
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 5
 done
 
-# Extra settling delay to ensure all critical system daemons have initialized
 sleep 15
 
-# ── 0. Post-Boot Bootloader Lock Property Spoofing (Zero Bootloop, 100% Locked) ──
-# Android has fully booted! AVB verification and partition mounting are 100% complete.
-# Now spoof system properties to locked/green so Play Integrity, Key Attestation & banking apps report locked!
 for rp in resetprop /data/adb/ksu/bin/ksud /data/adb/ksud; do
     if command -v resetprop >/dev/null 2>&1; then
         resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
@@ -527,18 +531,12 @@ for rp in resetprop /data/adb/ksu/bin/ksud /data/adb/ksud; do
     fi
 done
 
-# ── 1. iOS-Style QoS CPU Pinning & Core Isolation ──
-# Confine background sync/telemetry/logging strictly to Little cores (0-3)
-# Keeps Gold (4-6) & Prime (7) L1/L2 caches unpolluted for games & active UI apps
 echo 0-3 > /dev/cpuset/background/cpus 2>/dev/null || true
 echo 0-3 > /dev/cpuset/system-background/cpus 2>/dev/null || true
 echo 0-3 > /dev/cpuset/restricted/cpus 2>/dev/null || true
 echo 0-6 > /dev/cpuset/foreground/cpus 2>/dev/null || true
 echo 0-7 > /dev/cpuset/top-app/cpus 2>/dev/null || true
 
-# ── 2. Dynamic Task Weighting (Schedtune) & WALT Core Migration ──
-# Dynamic Task Weighting: Boost perceived load for top-app on render burst
-# IMPORTANT: prefer_idle = 0 preserves L1/L2 cache locality, fixing WhatsApp and UI scroll stutter!
 echo 15 > /dev/stune/top-app/schedtune.boost 2>/dev/null || true
 echo 0 > /dev/stune/top-app/schedtune.prefer_idle 2>/dev/null || true
 echo 0 > /dev/stune/foreground/schedtune.prefer_idle 2>/dev/null || true
@@ -546,14 +544,11 @@ echo 0 > /dev/stune/background/schedtune.prefer_idle 2>/dev/null || true
 echo 15 > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null || true
 echo 1 > /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 2>/dev/null || true
 
-# Smooth Core Spillover (Silver -> Gold at 65%, Gold -> Prime at 80%)
-# 15% hysteresis gap completely prevents migration ping-pong / jitter
 echo "65 80" > /proc/sys/kernel/sched_upmigrate 2>/dev/null || true
 echo "50 65" > /proc/sys/kernel/sched_downmigrate 2>/dev/null || true
 echo 70 > /proc/sys/kernel/sched_group_upmigrate 2>/dev/null || true
 echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
 
-# ── 3. Enforce EXTREME+ Governor & iPhone-Grade Frame Pacing Tunables ──
 for p in /sys/devices/system/cpu/cpufreq/policy*; do
     if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
         echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
@@ -568,16 +563,12 @@ for p in /sys/devices/system/cpu/cpufreq/policy*; do
     done
 done
 
-# Anti-Flicker: Little cluster floor at 576MHz prevents DSI mode-switch flicker during YouTube 120Hz<->60Hz switching
 echo 576000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
 echo 710400 > /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq 2>/dev/null || true
 echo 844800 > /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null || true
 
-# Power Efficient Workqueues (Sleep & Deep Sleep Battery Optimization)
 echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
 
-# ── 4. EXTREME++ 6GB RAM & Zero-Kill LMK Suite (Acts like 10GB Virtual RAM) ──
-# Dynamic VM Watermarks & Extra Free Page Buffer: Eliminates Direct Reclaim Freezes
 echo 60 > /proc/sys/vm/swappiness 2>/dev/null || true
 echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
 echo 15 > /proc/sys/vm/dirty_ratio 2>/dev/null || true
@@ -589,7 +580,6 @@ echo 750 > /proc/sys/vm/extfrag_threshold 2>/dev/null || true
 echo 20 > /proc/sys/vm/compaction_proactiveness 2>/dev/null || true
 echo 1 > /proc/sys/vm/compact_unevictable_allowed 2>/dev/null || true
 
-# Android LMKD & PSI Anti-Kill Logic (Protects Multitasking & Minimizing BGMI)
 setprop ro.lmk.kill_heaviest_task false 2>/dev/null || true
 setprop ro.lmk.kill_timeout_ms 150 2>/dev/null || true
 setprop ro.lmk.psi_partial_stall_ms 70 2>/dev/null || true
@@ -598,7 +588,6 @@ setprop ro.lmk.swap_util_max 90 2>/dev/null || true
 setprop ro.lmk.thrashing_limit 30 2>/dev/null || true
 setprop ro.lmk.downgrade_pressure 100 2>/dev/null || true
 
-# Storage I/O Optimization (UFS 3.1 512KB Burst Read-Ahead for Instant Cold App Launches)
 for queue in /sys/block/*/queue; do
     if [ -d "$queue" ]; then
         echo 0 > "$queue/iostats" 2>/dev/null || true
@@ -609,7 +598,6 @@ for queue in /sys/block/*/queue; do
     fi
 done
 
-# ── 5. Network & TCP BBR Congestion Control (Low Ping & Fast Bullet Registration) ──
 echo "bbr" > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || true
@@ -619,13 +607,8 @@ echo 1 > /proc/sys/net/ipv4/tcp_window_scaling 2>/dev/null || true
 echo 3 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null || true
 echo "fq" > /proc/sys/net/core/default_qdisc 2>/dev/null || true
 
-# ── 6. Joyose & Xiaomi Game Throttling Neutering (Pure Clean FPS) ──
-# Keep mi_thermald & thermal-engine running for stock 67W Mi Turbo authentication & battery health.
-# Only neutralize Joyose cloud game throttling.
 setprop persist.sys.joyose.thermal.disabled 1 2>/dev/null || true
 
-# ── 7. Safe GPU Power Nodes & Adreno Governor Permissions ──
-# Keep root/system-writable while protecting against unprivileged third-party app manipulation
 chown root:system /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
 chmod 664 /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
 chown root:system /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
@@ -639,7 +622,6 @@ chmod 664 /sys/class/kgsl/kgsl-3d0/gpu_max_clock 2>/dev/null || true
 chmod 444 /sys/class/kgsl/kgsl-3d0/gpubusy 2>/dev/null || true
 chmod 444 /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null || true
 
-# ── 8. CPU Freq Governor Permissions ──
 chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null || true
 chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null || true
 chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null || true
@@ -647,12 +629,10 @@ chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null |
 chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
 chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
 
-# ── 9. Xiaomi Battery Fast Charge Unlock ──
 for f in /sys/class/qcom-battery/quick_charge_type /sys/class/power_supply/battery/fastcharge_mode; do
     [ -f "$f" ] && echo 1 > "$f" 2>/dev/null || true
 done
 
-# ── 10. Intelligent LMK OOM Shield Daemon (Auto-Protects WhatsApp & Launcher) ──
 (
 while true; do
     sleep 45
@@ -708,17 +688,14 @@ for VARIANT in "${VARIANTS_TO_BUILD[@]}"; do
     echo "   Android Settings Kernel Display: 4.19.xxx${LOCALVER}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    # 1. Apply C-level hardware frequency clamp in qcom-cpufreq-hw.c & kona.dtsi
     if [ -f "apply-cpu-cap.py" ]; then
         python3 apply-cpu-cap.py "${FREQ}"
     fi
 
-    # 2. Update CONFIG_LOCALVERSION and sync config
     scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "${LOCALVER}"
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make "${MAKE_OPTS[@]}" olddefconfig
 
-    # 3. Compile Kernel Image for this variant
     echo "[*] Compiling Kernel Image for ${VARIANT}..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
 
@@ -727,10 +704,8 @@ for VARIANT in "${VARIANTS_TO_BUILD[@]}"; do
         exit 1
     fi
 
-    # 4. Copy newly compiled Image to anykernel
     cp "${OUT_DIR}/arch/arm64/boot/Image" anykernel/Image
 
-    # 5. Write variant-specific anykernel.sh
     cat > anykernel/anykernel.sh << EOF
 ### AnyKernel3 Ramdisk Mod Script
 ## EXTREME++ HyperOS Kernel for POCO F4 (munch) by PandeyJI-9
@@ -747,7 +722,6 @@ device.name2=POCO F4
 supported.versions=13-17
 '; }
 
-# shell variables
 block=boot;
 is_slot_device=1;
 ramdisk_compression=auto;
@@ -760,7 +734,6 @@ ui_print "  -> Flashing ${TITLE} (boot)...";
 dump_boot;
 write_boot;
 
-## vendor_boot DTB install (Leaves vendor ramdisk 100% untouched for flawless recovery)
 ui_print "  -> Flashing EXTREME++ Undervolted DTB (vendor_boot)...";
 block=vendor_boot;
 is_slot_device=1;
@@ -770,9 +743,7 @@ patch_vbmeta_flag=0;
 reset_ak;
 dump_boot;
 write_boot;
-# NOTE: Stock DTBO partition is preserved 100% untouched to ensure OEM display panel calibrations & recovery work flawlessly!
 
-# Install post-boot optimization script into /data/adb/service.d for KSU/RKSU/Magisk
 if [ ! -d /data/adb/service.d ]; then
     mount /data 2>/dev/null
 fi
@@ -785,7 +756,6 @@ if [ -d /data/adb ]; then
 fi
 EOF
 
-    # 6. Package into flashable ZIP
     if [ "$ENABLE_KSU" -eq 1 ]; then
         ZIP_NAME="${ZIP_BASE}_${DATE_TAG}.zip"
     else
