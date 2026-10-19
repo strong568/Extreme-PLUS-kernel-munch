@@ -1,4 +1,4 @@
-name: "🚀 Build EXTREME++ Kernel & Publish with KSU Managers"
+name: "🚀 Build EXTREME++ Kernel & Publish with multi KSU Managers"
 
 on:
   workflow_dispatch:
