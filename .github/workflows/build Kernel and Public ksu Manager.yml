@@ -50,8 +50,8 @@ jobs:
           fi
 
           # Cấu hình Git giả lập (tránh lỗi khi setup.sh của ReSukiSU hoặc Baseband-guard chạy git apply/commit)
-          git config --global user.name "PandeyJI-9"
-          git config --global user.email "pandeyji@extremeplusplus.dev"
+          git config --global user.name "strong568"
+          git config --global user.email "extreme@extremeplusplus.dev"
           git config --global color.ui false
           git config --global init.defaultBranch main
 
