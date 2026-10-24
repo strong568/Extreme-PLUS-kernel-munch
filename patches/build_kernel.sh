@@ -47,10 +47,10 @@ find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -dele
 # ------------------------------------------
 # 1. Custom Kernel Name Configuration
 # ------------------------------------------
-echo "[*] Setting Custom Kernel Name to -EXTREME++GAMING_Hyperos..."
+echo "[*] Setting Custom Kernel Name to -Extreme++Gaming-BMW-Edition..."
 rm -f localversion*
-sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-EXTREME++GAMING_Hyperos"/' "arch/arm64/configs/${DEFCONFIG}"
-grep -q "CONFIG_LOCALVERSION=" "arch/arm64/configs/${DEFCONFIG}" || echo 'CONFIG_LOCALVERSION="-EXTREME++GAMING_Hyperos"' >> "arch/arm64/configs/${DEFCONFIG}"
+sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-Extreme++Gaming-BMW-Edition"/' "arch/arm64/configs/${DEFCONFIG}"
+grep -q "CONFIG_LOCALVERSION=" "arch/arm64/configs/${DEFCONFIG}" || echo 'CONFIG_LOCALVERSION="-Extreme++Gaming-BMW-Edition"' >> "arch/arm64/configs/${DEFCONFIG}"
 sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
 
 # ZRAM ZSTD, EXTREME+ Governor & GPU Devfreq defconfig tunables
@@ -238,6 +238,11 @@ echo "[*] Preserving 100% Native AstideLabs Display & Panel DTS (prevents black 
 # ------------------------------------------
 # 6. Safe PD / PPS Fast Charging & Thermal DTS Stepping
 # ------------------------------------------
+if [ -f "apply-cpu-cap.py" ]; then
+    echo "[*] Ensuring full-range 3.19 GHz Prime Core driver & DTS alignment before defconfig..."
+    python3 apply-cpu-cap.py 3187200
+fi
+
 if [ -f "apply-fastcharge-bypass.py" ]; then
     echo "[*] Applying safe PD/PPS Fast Charge & Thermal DTS Stepping patches..."
     python3 apply-fastcharge-bypass.py
@@ -296,7 +301,7 @@ scripts/config --file "${OUT_DIR}/.config" \
     --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
 
 scripts/config --file "${OUT_DIR}/.config" -e BBG
-scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "-EXTREME++GAMING_Hyperos"
+scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "-Extreme++Gaming-BMW-Edition"
 
 # 🚀 6GB RAM & Zero-Stutter Memory Optimizations (ZRAM ZSTD)
 scripts/config --file "${OUT_DIR}/.config" \
@@ -308,14 +313,13 @@ scripts/config --file "${OUT_DIR}/.config" \
     -d ZRAM_DEF_COMP_LZ4 \
     --set-str ZRAM_DEF_COMP "zstd"
 
-# 🚀 Ultra-Fast & Safe Boot (Zero-Latency Schedutil Boot, Auto-Switch to EXTREME+ Post-Boot)
+# 🚀 Ultra-Fast & Safe Boot (Zero-Latency EXTREME+ Boot by default)
 scripts/config --file "${OUT_DIR}/.config" \
     -e CPU_FREQ_GOV_SCHEDUTIL \
-    --set-val SCHEDUTIL_UP_RATE_LIMIT 0 \
     -e CPU_FREQ_GOV_EXTREME_PLUS \
-    -d CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
-    -e CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
-    --set-str CPU_FREQ_DEFAULT_GOV "schedutil"
+    -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
+    -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+    --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
 
 if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
     sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 0;/' kernel/sched/cpufreq_schedutil.c
@@ -415,29 +419,9 @@ echo "[*] Synchronizing final kernel config with olddefconfig..."
 make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
 
 # ------------------------------------------
-# 9. Multi-Variant Architecture & AnyKernel3 Preparation
+# 9. Master DTB Table & DTBO Preparation
 # ------------------------------------------
-TARGET_VARIANT="${3:-all}"
-VARIANTS_TO_BUILD=()
-case "${TARGET_VARIANT,,}" in
-    battery|2.5ghz|2.5|2.4ghz|2.4)
-        VARIANTS_TO_BUILD=("Battery")
-        ;;
-    bal-gaming|bal_gaming|balanced|2.8ghz|2.8)
-        VARIANTS_TO_BUILD=("Bal-Gaming")
-        ;;
-    gaming|3.2ghz|3.2)
-        VARIANTS_TO_BUILD=("Gaming")
-        ;;
-    all|both|*)
-        VARIANTS_TO_BUILD=("Battery" "Bal-Gaming" "Gaming")
-        ;;
-esac
-
-echo "[*] Selected Target Variant(s): ${VARIANTS_TO_BUILD[*]}"
-
-# Step 9a: Compile Shared Multi-DTB Table & DTBO
-echo "[*] Compiling Shared Multi-DTB Table & DTBO Image..."
+echo "[*] Compiling Master Multi-DTB Table & DTBO Image..."
 make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
 
 # ------------------------------------------
@@ -476,7 +460,10 @@ cat > anykernel/00-extreme-performance.sh << 'EOF'
 (
 # Accelerate Cold Boot: Stream system APKs & ODEX files at maximum UFS 3.1 bus bandwidth (2048 KB)
 for queue in /sys/block/*/queue; do
-    [ -d "$queue" ] && echo 2048 > "$queue/read_ahead_kb" 2>/dev/null || true
+    case "$queue" in
+        *zram*|*loop*) continue ;;
+        *) [ -d "$queue" ] && echo 2048 > "$queue/read_ahead_kb" 2>/dev/null || true ;;
+    esac
 done
 
 # Wait for Android framework to fully complete boot in background without blocking init
@@ -490,42 +477,47 @@ sleep 15
 # ── 0. Post-Boot Bootloader Lock Property Spoofing (Zero Bootloop, 100% Locked) ──
 # Android has fully booted! AVB verification and partition mounting are 100% complete.
 # Now spoof system properties to locked/green so Play Integrity, Key Attestation & banking apps report locked!
-for rp in resetprop /data/adb/ksu/bin/ksud /data/adb/ksud; do
-    if command -v resetprop >/dev/null 2>&1; then
-        resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
-        resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
-        resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
-        resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
-        resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
-        resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
-        resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
-        resetprop -n ro.warranty_bit 0 2>/dev/null || true
-        echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via resetprop!" > /dev/kmsg 2>/dev/null || true
-        break
-    elif [ -x /data/adb/ksu/bin/ksud ]; then
-        /data/adb/ksu/bin/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
-        /data/adb/ksu/bin/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
-        echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via ksud resetprop!" > /dev/kmsg 2>/dev/null || true
-        break
-    elif [ -x /data/adb/ksud ]; then
-        /data/adb/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
-        /data/adb/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
-        /data/adb/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
-        /data/adb/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
-        /data/adb/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
-        /data/adb/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
-        /data/adb/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
-        /data/adb/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
-        echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via legacy ksud resetprop!" > /dev/kmsg 2>/dev/null || true
-        break
-    fi
-done
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:$PATH"
+
+RP="$(command -v resetprop 2>/dev/null)"
+[ -z "$RP" ] && [ -x /data/adb/ksu/bin/resetprop ] && RP="/data/adb/ksu/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/ap/bin/resetprop ] && RP="/data/adb/ap/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/magisk/resetprop ] && RP="/data/adb/magisk/resetprop"
+
+if [ -n "$RP" ]; then
+    "$RP" -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    "$RP" -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    "$RP" -n ro.boot.veritymode enforcing 2>/dev/null || true
+    "$RP" -n ro.boot.flash.locked 1 2>/dev/null || true
+    "$RP" -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    "$RP" -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    "$RP" -n ro.secureboot.lockstate locked 2>/dev/null || true
+    "$RP" -n ro.boot.warranty_bit 0 2>/dev/null || true
+    "$RP" -n ro.warranty_bit 0 2>/dev/null || true
+    echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via resetprop!" > /dev/kmsg 2>/dev/null || true
+elif [ -x /data/adb/ksu/bin/ksud ]; then
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.veritymode enforcing 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+    echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via ksud resetprop!" > /dev/kmsg 2>/dev/null || true
+elif [ -x /data/adb/ksud ]; then
+    /data/adb/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.veritymode enforcing 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    /data/adb/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+    echo "PROJECT EXTREME+: Bootloader properties successfully spoofed to locked/green post-boot via legacy ksud resetprop!" > /dev/kmsg 2>/dev/null || true
+fi
 
 # ── 1. iOS-Style QoS CPU Pinning & Core Isolation ──
 # Confine background sync/telemetry/logging strictly to Little cores (0-3)
@@ -648,28 +640,13 @@ chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/de
 chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null || true
 chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
 chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
+chown root:system /sys/kernel/extreme_profile 2>/dev/null || true
+chmod 664 /sys/kernel/extreme_profile 2>/dev/null || true
 
 # ── 9. Xiaomi Battery Fast Charge Unlock ──
 for f in /sys/class/qcom-battery/quick_charge_type /sys/class/power_supply/battery/fastcharge_mode; do
     [ -f "$f" ] && echo 1 > "$f" 2>/dev/null || true
 done
-
-# ── 10. Intelligent LMK OOM Shield Daemon (Auto-Protects WhatsApp & Launcher) ──
-(
-while true; do
-    sleep 45
-    for pkg in com.whatsapp org.telegram.messenger com.miui.home com.android.systemui; do
-        for pid in $(pidof "$pkg" 2>/dev/null); do
-            if [ -f "/proc/$pid/oom_score_adj" ]; then
-                current_adj=$(cat "/proc/$pid/oom_score_adj" 2>/dev/null || echo 1000)
-                if [ "$current_adj" -gt 600 ]; then
-                    echo 600 > "/proc/$pid/oom_score_adj" 2>/dev/null || true
-                fi
-            fi
-        done
-    done
-done
-) &
 
 echo "PROJECT EXTREME++: Joyose neutralized, EXTREME+ governor active, LMK Zero-Kill active, 67W Mi Turbo preserved!" > /dev/kmsg 2>/dev/null || true
 
@@ -677,65 +654,96 @@ echo "PROJECT EXTREME++: Joyose neutralized, EXTREME+ governor active, LMK Zero-
 EOF
 chmod 755 anykernel/00-extreme-performance.sh
 
+# Create 00-extreme-props.sh early-boot post-fs-data service
+cat > anykernel/00-extreme-props.sh << 'EOF'
+#!/system/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  PROJECT EXTREME++ — Early-Boot Bootloader Lock Property Sync
+#  POCO F4 (munch / SM8250-AC Kona) | HyperOS ONLY
+#  Executes in post-fs-data BEFORE Zygote & GMS launch!
+# ═══════════════════════════════════════════════════════════════
+
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:$PATH"
+
+RP="$(command -v resetprop 2>/dev/null)"
+[ -z "$RP" ] && [ -x /data/adb/ksu/bin/resetprop ] && RP="/data/adb/ksu/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/ap/bin/resetprop ] && RP="/data/adb/ap/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/magisk/resetprop ] && RP="/data/adb/magisk/resetprop"
+
+if [ -n "$RP" ]; then
+    "$RP" -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    "$RP" -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    "$RP" -n ro.boot.veritymode enforcing 2>/dev/null || true
+    "$RP" -n ro.boot.flash.locked 1 2>/dev/null || true
+    "$RP" -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    "$RP" -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    "$RP" -n ro.secureboot.lockstate locked 2>/dev/null || true
+    "$RP" -n ro.boot.warranty_bit 0 2>/dev/null || true
+    "$RP" -n ro.warranty_bit 0 2>/dev/null || true
+    echo "EXTREME++: Early-boot bootloader properties synced (green/locked) in post-fs-data!" > /dev/kmsg 2>/dev/null || true
+elif [ -x /data/adb/ksu/bin/ksud ]; then
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.veritymode enforcing 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+    echo "EXTREME++: Early-boot bootloader properties synced via ksud in post-fs-data!" > /dev/kmsg 2>/dev/null || true
+elif [ -x /data/adb/ksud ]; then
+    /data/adb/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.veritymode enforcing 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    /data/adb/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+    /data/adb/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+    echo "EXTREME++: Early-boot bootloader properties synced via legacy ksud in post-fs-data!" > /dev/kmsg 2>/dev/null || true
+fi
+EOF
+chmod 755 anykernel/00-extreme-props.sh
+
 # ------------------------------------------
-# 11. Multi-Variant Compilation & Packaging Engine
+# 11. Master Compilation & Packaging Engine (BMW Edition)
 # ------------------------------------------
 DATE_TAG="$(date +'%d%b%Y_%H%M')"
+LOCALVER="-Extreme++Gaming-BMW-Edition"
+TITLE="Extreme++Gaming BMW Edition [BETA] | POCO F4 (munch)"
+ZIP_BASE="EXTREME++Gaming_BMW_Edition_BETA"
 
-for VARIANT in "${VARIANTS_TO_BUILD[@]}"; do
-    case "$VARIANT" in
-        Battery)
-            FREQ="2419200"
-            LOCALVER="-Extreme++Battery-by-PandeyJi"
-            TITLE="Extreme++Battery by PandeyJi | POCO F4 (munch)"
-            ZIP_BASE="EXTREME++Battery"
-            ;;
-        Bal-Gaming)
-            FREQ="2841600"
-            LOCALVER="-Extreme++Bal-Gaming-by-PandeyJi"
-            TITLE="Extreme++Bal-Gaming by PandeyJi | POCO F4 (munch)"
-            ZIP_BASE="EXTREME++Bal-Gaming"
-            ;;
-        Gaming)
-            FREQ="3187200"
-            LOCALVER="-Extreme++Gaming-by-PandeyJi"
-            TITLE="Extreme++Gaming by PandeyJi | POCO F4 (munch)"
-            ZIP_BASE="EXTREME++Gaming"
-            ;;
-    esac
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🚀 Building EXTREME++ Master Release: ${TITLE}"
+echo "   Android Settings Kernel Display: 4.19.xxx${LOCALVER}"
+echo "   Default Frequency: 3.19 GHz (3187200 kHz) Unlocked Peak"
+echo "   Dynamic Profile Engine: /sys/kernel/extreme_profile"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 Building EXTREME++ Variant: ${VARIANT} (${FREQ} kHz)"
-    echo "   Android Settings Kernel Display: 4.19.xxx${LOCALVER}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# 1. Update CONFIG_LOCALVERSION and sync config
+scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "${LOCALVER}"
+rm -f "${OUT_DIR}/include/config/kernel.release"
+make "${MAKE_OPTS[@]}" olddefconfig
 
-    # 1. Apply C-level hardware frequency clamp in qcom-cpufreq-hw.c & kona.dtsi
-    if [ -f "apply-cpu-cap.py" ]; then
-        python3 apply-cpu-cap.py "${FREQ}"
-    fi
+# 2. Compile Master Kernel Image
+echo "[*] Compiling Master Kernel Image (3.19 GHz Monster Peak)..."
+make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
 
-    # 2. Update CONFIG_LOCALVERSION and sync config
-    scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "${LOCALVER}"
-    rm -f "${OUT_DIR}/include/config/kernel.release"
-    make "${MAKE_OPTS[@]}" olddefconfig
+if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
+    echo "❌ [ERROR] Master Kernel Image did NOT compile!"
+    exit 1
+fi
 
-    # 3. Compile Kernel Image for this variant
-    echo "[*] Compiling Kernel Image for ${VARIANT}..."
-    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
+# 4. Copy newly compiled Image to anykernel
+cp "${OUT_DIR}/arch/arm64/boot/Image" anykernel/Image
 
-    if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
-        echo "❌ [ERROR] Kernel Image for ${VARIANT} did NOT compile!"
-        exit 1
-    fi
-
-    # 4. Copy newly compiled Image to anykernel
-    cp "${OUT_DIR}/arch/arm64/boot/Image" anykernel/Image
-
-    # 5. Write variant-specific anykernel.sh
-    cat > anykernel/anykernel.sh << EOF
+# 5. Write anykernel.sh
+cat > anykernel/anykernel.sh << EOF
 ### AnyKernel3 Ramdisk Mod Script
-## EXTREME++ HyperOS Kernel for POCO F4 (munch) by PandeyJI-9
+## EXTREME++ HyperOS Kernel for POCO F4 (munch) - BMW Edition
 
 properties() { '
 kernel.string=${TITLE}
@@ -758,12 +766,29 @@ patch_vbmeta_flag=0;
 . tools/ak3-core.sh;
 
 ui_print " ";
-ui_print "  -> Flashing ${TITLE} (boot)...";
+ui_print " ══════════════════════════════════════════════";
+ui_print "   ______      __                              ";
+ui_print "  / ____/  __ / /_ _____ ___   ____ ___ ___    ";
+ui_print " / __/ | |/_// __// ___// _ \\ / __ '__// _ \\   ";
+ui_print "/ /___ _>  < / /_ / /   /  __// / / / /  __/   ";
+ui_print "\\____//_/|_| \\__//_/    \\___//_/ /_/ / \\___/   ";
+ui_print "                 [ + + ]                       ";
+ui_print " ══════════════════════════════════════════════";
+ui_print "  🏎️  EDITION : BMW Gaming Edition (BETA)      ";
+ui_print "  👑  AUTHOR  : Extreme++ by @pandey_ji_8      ";
+ui_print "  📱  DEVICE  : POCO F4 (munch) | HyperOS      ";
+ui_print "  ⚡  CLOCK   : 3.19 GHz Unlocked Monster Peak ";
+ui_print "  🚀  PROFILES: In-Kernel Dynamic Switcher     ";
+ui_print " ══════════════════════════════════════════════";
+ui_print " ";
+
+ui_print "  [1/4] ⚡ Extracting & Patching Boot Partition...";
 dump_boot;
+ui_print "  [1/4] 🚀 Writing EXTREME++ 3.19 GHz Kernel Image...";
 write_boot;
 
 ## vendor_boot DTB install (Leaves vendor ramdisk 100% untouched for flawless recovery)
-ui_print "  -> Flashing EXTREME++ Undervolted DTB (vendor_boot)...";
+ui_print "  [2/4] 📦 Analyzing Vendor Boot Partition...";
 block=vendor_boot;
 is_slot_device=1;
 ramdisk_compression=auto;
@@ -771,39 +796,54 @@ patch_vbmeta_flag=0;
 
 reset_ak;
 dump_boot;
+ui_print "  [2/4] 🏎️ Writing FakeDreamer Adreno 650 Undervolted DTB...";
 write_boot;
 # NOTE: Stock DTBO partition is preserved 100% untouched to ensure OEM display panel calibrations & recovery work flawlessly!
 
-# Install post-boot optimization script into /data/adb/service.d for KSU/RKSU/Magisk
-if [ ! -d /data/adb/service.d ]; then
-    mount /data 2>/dev/null
-fi
+# Install post-fs-data & service.d scripts into /data/adb for KSU/RKSU/Magisk/APatch
+ui_print "  [3/4] 🛡️ Checking /data Storage & Root Subsystem...";
+mount /data 2>/dev/null
+[ -d /data ] && mkdir -p /data/adb/post-fs-data.d /data/adb/service.d 2>/dev/null
 if [ -d /data/adb ]; then
+    mkdir -p /data/adb/post-fs-data.d
     mkdir -p /data/adb/service.d
-    ui_print "  -> Installing EXTREME++ Joyose & Performance Service...";
+    ui_print "  [3/4] 💉 Installing Early Bootloader Lock Guard (post-fs-data)...";
+    cp -f 00-extreme-props.sh /data/adb/post-fs-data.d/00-extreme-props.sh 2>/dev/null || cp -f \$home/00-extreme-props.sh /data/adb/post-fs-data.d/00-extreme-props.sh 2>/dev/null
+    chmod 755 /data/adb/post-fs-data.d/00-extreme-props.sh
+    chown root:root /data/adb/post-fs-data.d/00-extreme-props.sh 2>/dev/null
+
+    ui_print "  [3/4] ⚙️ Installing Joyose Neutralizer & Dynamic Profiles (service.d)...";
     cp -f 00-extreme-performance.sh /data/adb/service.d/00-extreme-performance.sh 2>/dev/null || cp -f \$home/00-extreme-performance.sh /data/adb/service.d/00-extreme-performance.sh 2>/dev/null
     chmod 755 /data/adb/service.d/00-extreme-performance.sh
     chown root:root /data/adb/service.d/00-extreme-performance.sh 2>/dev/null
 fi
+
+ui_print "  [4/4] ✨ Preserving OEM Display Calibrations & Finalizing...";
+
+ui_print " ";
+ui_print " ══════════════════════════════════════════════";
+ui_print "  🎉 Extreme++ Kernel By @pandey_ji_8 Flashed! ";
+ui_print "  🏎️ BMW Edition [BETA] is Ready to Rock!      ";
+ui_print " ══════════════════════════════════════════════";
+ui_print " ";
 EOF
 
-    # 6. Package into flashable ZIP
-    if [ "$ENABLE_KSU" -eq 1 ]; then
-        ZIP_NAME="${ZIP_BASE}_${DATE_TAG}.zip"
-    else
-        ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
-    fi
+# 6. Package into flashable ZIP
+if [ "$ENABLE_KSU" -eq 1 ]; then
+    ZIP_NAME="${ZIP_BASE}_${DATE_TAG}.zip"
+else
+    ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
+fi
 
-    (
-        cd anykernel
-        zip -r9 "../${ZIP_NAME}" ./* -x .gitignore out/ ./*.zip > /dev/null
-    )
+(
+    cd anykernel
+    zip -r9 "../${ZIP_NAME}" ./* -x .gitignore out/ ./*.zip > /dev/null
+)
 
-    echo "[+] =========================================================="
-    echo "[+] SUCCESS! ${VARIANT} package ready: ${ZIP_NAME}"
-    echo "[+] =========================================================="
-done
+echo "[+] =========================================================="
+echo "[+] SUCCESS! Master package ready: ${ZIP_NAME}"
+echo "[+] =========================================================="
 
 echo ""
-echo "🎉 ALL REQUESTED EXTREME++ VARIANTS BUILT AND PACKAGED SUCCESSFULLY!"
+echo "🎉 EXTREME++ BMW EDITION KERNEL BUILT AND PACKAGED SUCCESSFULLY!"
 exit 0
