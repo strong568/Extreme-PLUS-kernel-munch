@@ -141,7 +141,7 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
             curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main
             ;;
         "backslashxx/KernelSU")
-            curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s -- master
             ;;
         "KernelSU-Next/KernelSU-Next")
             curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s -- next
