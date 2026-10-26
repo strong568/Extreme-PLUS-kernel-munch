@@ -717,20 +717,20 @@ do
     case "$VARIANT" in
         Battery)
             FREQ="2419200"
-            LOCALVER="-Extreme++Battery-by-PandeyJi"
-            TITLE="Extreme++Battery by PandeyJi | POCO F4 (munch)"
+            LOCALVER="-Extreme++Battery-"
+            TITLE="Extreme++Battery | POCO F4 (munch)"
             ZIP_BASE="EXTREME++Battery"
             ;;
         Bal-Gaming)
             FREQ="2841600"
-            LOCALVER="-Extreme++Bal-Gaming-by-PandeyJi"
-            TITLE="Extreme++Bal-Gaming by PandeyJi | POCO F4 (munch)"
+            LOCALVER="-Extreme++Bal-Gaming-"
+            TITLE="Extreme++Bal-Gaming | POCO F4 (munch)"
             ZIP_BASE="EXTREME++Bal-Gaming"
             ;;
         Gaming)
             FREQ="3187200"
-            LOCALVER="-Extreme++Gaming-by-PandeyJi"
-            TITLE="Extreme++Gaming by PandeyJi | POCO F4 (munch)"
+            LOCALVER="-Extreme++Gaming-"
+            TITLE="Extreme++Gaming | POCO F4 (munch)"
             ZIP_BASE="EXTREME++Gaming"
             ;;
     esac
