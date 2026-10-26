@@ -8,9 +8,6 @@ Safe PD / PPS Charger Unlock & Thermal DTS Stepping (Zero-Bootloop Architecture)
    - pd_policy_manager_munch.c:
      * min_adapter_volt_required -> 8500 (8.5V for third-party PPS support)
      * min_adapter_curr_required -> 1500 (1.5A for third-party PPS support)
-   - smb5-lib-munch.c:
-     * When pd_active is true, raise initial limits to 3.0A (3000000 uA)
-       for PD_VOTER on usb_icl_votable and PD_VERIFED_VOTER on fcc_votable
 
 2. 100% Stock Xiaomi 67W Cryptographic Handshake:
    - pd_get_bms_digest_verified and BMS authentic verification left 100% stock

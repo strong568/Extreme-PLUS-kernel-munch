@@ -22,13 +22,6 @@
 #include <linux/sysfs.h>
 #include <linux/cpufreq.h>
 
-#ifndef task_is_booster
-#ifdef CONFIG_XIAOMI_MIUI
-extern bool task_is_booster(struct task_struct *p);
-#else
-static inline bool task_is_booster(struct task_struct *p) { return false; }
-#endif
-#endif
 
 struct extreme_plus_tunables {
 	struct gov_attr_set	attr_set;
@@ -178,6 +171,9 @@ static bool extreme_plus_up_down_rate_limit(struct extreme_plus_policy *sg_polic
 {
 	s64 delta_ns;
 
+	if (sg_policy->need_freq_update)
+		return false;
+
 	delta_ns = time - sg_policy->last_freq_update_time;
 
 	/* Instant touch/load reaction: zero delay for ramping up */
@@ -200,7 +196,7 @@ static bool extreme_plus_up_down_rate_limit(struct extreme_plus_policy *sg_polic
 static bool extreme_plus_update_next_freq(struct extreme_plus_policy *sg_policy, u64 time,
 				   unsigned int next_freq)
 {
-	if (sg_policy->next_freq == next_freq)
+	if (!sg_policy->need_freq_update && sg_policy->next_freq == next_freq)
 		return false;
 
 	if (extreme_plus_up_down_rate_limit(sg_policy, time, next_freq)) {
@@ -209,6 +205,7 @@ static bool extreme_plus_update_next_freq(struct extreme_plus_policy *sg_policy,
 		return false;
 	}
 
+	sg_policy->need_freq_update = false;
 	sg_policy->next_freq = next_freq;
 	sg_policy->last_freq_update_time = time;
 
@@ -349,8 +346,10 @@ static bool extreme_plus_cluster_has_heavy_tasks(struct cpufreq_policy *policy)
 		struct extreme_plus_cpu *c_cpu = &per_cpu(extreme_plus_cpu, c);
 		if (rq && rq->nr_running > 1)
 			return true;
-		if (c_cpu->walt_load.rtgb_active)
+#ifdef CONFIG_SCHED_WALT
+		if (!use_pelt() && c_cpu->walt_load.rtgb_active)
 			return true;
+#endif
 	}
 	return false;
 }
@@ -437,10 +436,16 @@ static unsigned int extreme_plus_autonomous_engine(struct extreme_plus_cpu *sg_c
 	for_each_cpu(c, policy->cpus) {
 		struct extreme_plus_cpu *c_cpu = &per_cpu(extreme_plus_cpu, c);
 		struct rq *c_rq = cpu_rq(c);
-		if (c_cpu->walt_load.rtgb_active || (c_rq && c_rq->nr_running > 1)) {
+		if (c_rq && c_rq->nr_running > 1) {
 			is_render_active = true;
 			break;
 		}
+#ifdef CONFIG_SCHED_WALT
+		if (!use_pelt() && c_cpu->walt_load.rtgb_active) {
+			is_render_active = true;
+			break;
+		}
+#endif
 	}
 
 	/* ── Cluster 2: Prime Core 7 (Kryo 585 Prime) ── */
@@ -490,7 +495,6 @@ static unsigned int extreme_plus_autonomous_engine(struct extreme_plus_cpu *sg_c
 	if (target_f == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
 		return sg_policy->next_freq;
 
-	sg_policy->need_freq_update = false;
 	sg_policy->prev_cached_raw_freq = sg_policy->cached_raw_freq;
 	sg_policy->cached_raw_freq = target_f;
 
@@ -914,7 +918,7 @@ static void extreme_plus_update_single(struct update_util_data *hook, u64 time,
 	 * Do not reduce the frequency if the CPU has not been idle
 	 * recently, as the reduction is likely to be premature then.
 	 */
-	if (busy && next_f < sg_policy->next_freq) {
+	if (!sg_policy->need_freq_update && busy && next_f < sg_policy->next_freq) {
 		next_f = sg_policy->next_freq;
 
 		/* Restore cached freq as next_freq has changed */
@@ -1468,7 +1472,7 @@ static int extreme_plus_init(struct cpufreq_policy *policy)
 		goto stop_kthread;
 	}
 
-	tunables->up_rate_limit_us = 500;
+	tunables->up_rate_limit_us = 0;
 	tunables->down_rate_limit_us = 20000;
 	tunables->hispeed_load = 65;
 
@@ -1631,6 +1635,7 @@ static void extreme_plus_limits(struct cpufreq_policy *policy)
 		 */
 		freq = cpufreq_driver_resolve_freq(policy, freq);
 		sg_policy->cached_raw_freq = freq;
+		sg_policy->need_freq_update = true;
 		extreme_plus_fast_switch(sg_policy, now, freq);
 		raw_spin_unlock_irqrestore(&sg_policy->update_lock, flags);
 	}
@@ -1675,6 +1680,7 @@ struct cpufreq_governor *cpufreq_default_governor(void)
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 static int extreme_profile_mode = 0; /* Default 0: Gaming Monster */
+static DEFINE_MUTEX(extreme_profile_lock);
 
 static void extreme_profile_apply(int mode)
 {
@@ -1704,6 +1710,8 @@ static void extreme_profile_apply(int mode)
 	if (policy_prime) {
 		if (prime_max_freq > policy_prime->cpuinfo.max_freq)
 			prime_max_freq = policy_prime->cpuinfo.max_freq;
+		if (prime_max_freq < policy_prime->min)
+			prime_max_freq = policy_prime->min;
 		down_write(&policy_prime->rwsem);
 		policy_prime->user_policy.max = prime_max_freq;
 		policy_prime->max = prime_max_freq;
@@ -1717,6 +1725,8 @@ static void extreme_profile_apply(int mode)
 	if (policy_gold) {
 		if (gold_max_freq > policy_gold->cpuinfo.max_freq)
 			gold_max_freq = policy_gold->cpuinfo.max_freq;
+		if (gold_max_freq < policy_gold->min)
+			gold_max_freq = policy_gold->min;
 		down_write(&policy_gold->rwsem);
 		policy_gold->user_policy.max = gold_max_freq;
 		policy_gold->max = gold_max_freq;
@@ -1747,8 +1757,10 @@ static ssize_t extreme_profile_store(struct kobject *kobj,
 	if (val < 0 || val > 2)
 		return -EINVAL;
 
+	mutex_lock(&extreme_profile_lock);
 	extreme_profile_mode = val;
 	extreme_profile_apply(val);
+	mutex_unlock(&extreme_profile_lock);
 
 	return count;
 }
