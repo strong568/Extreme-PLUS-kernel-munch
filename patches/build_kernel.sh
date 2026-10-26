@@ -46,7 +46,7 @@ TOTAL_CORES=$(nproc --all)
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 EXTREME++ BMW Edition Build Engine Initiated!"
 echo "   Device: POCO F4 (munch / SM8250-AC)"
-echo "   Root Mode: $([ "$ENABLE_KSU" -eq 1 ] && echo 'KowSU Multi-Manager + SuSFS v2.3.0' || echo 'Pure Clean Base')"
+echo "   Root Mode: $([ "$ENABLE_KSU" -eq 1 ] && echo 'BakaSU Multi-Manager + SuSFS' || echo 'Pure Clean Base')"
 echo "   Target Mode: ${TARGET_OS}"
 echo "   System Cores: ${TOTAL_CORES} (Running at Full Speed)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -96,15 +96,15 @@ if ! grep -q "selinux,baseband_guard" security/Kconfig; then
 fi
 
 # ------------------------------------------
-# 3. KernelSU (RKSU / ReSukiSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup
+# 3. KernelSU (BakaSU Setup)
 # ------------------------------------------
 if [ "$ENABLE_KSU" -eq 1 ]; then
-    echo "[*] Injecting ReSukiSU / RKSU Multi-Manager (Non-GKI 4.19 with SuSFS v2.3.0) Source..."
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+    echo "[*] Injecting BakaSU Source..."
+    curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
 
     if [ -f "drivers/kernelsu/Kconfig" ]; then
-        sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
-        echo "[+] Default hook set to KSU_SUSFS in drivers/kernelsu/Kconfig"
+        sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig 2>/dev/null || true
+        echo "[+] Default hook check complete in drivers/kernelsu/Kconfig"
     fi
 
     python3 -c '
@@ -151,7 +151,7 @@ if apk_sign_path:
     echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "[+] RKSU / ReSukiSU Multi-Manager Non-GKI setup finished."
+    echo "[+] BakaSU setup finished."
 else
     echo "[*] Ensuring Pure Clean Kernel Base (Zero embedded root hooks)..."
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
@@ -352,9 +352,9 @@ build_target_os() {
         -d DEBUG_KMEMLEAK \
         -d DEBUG_PREEMPT
 
-    # 6. Root Configuration (KowSU / ReSukiSU + SuSFS v2.3.0 vs Pure Clean Base)
+    # 6. Root Configuration (BakaSU vs Pure Clean Base)
     if [ "$ENABLE_KSU" -eq 1 ]; then
-        echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
+        echo "[*] Injecting Full BakaSU + SuSFS Configuration into ${OS_UPPER} .config..."
         scripts/config --file "${OUT_DIR}/.config" \
             -e KSU \
             -e KSU_SUSFS \
