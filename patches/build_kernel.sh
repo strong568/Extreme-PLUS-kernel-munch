@@ -42,13 +42,16 @@ export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
 export CCACHE_EXEC=$(command -v ccache)
 export USE_CCACHE=1
 
+# Tối ưu hóa số core để chống OOM khi Clang 16 biên dịch qcacld-3.0
 TOTAL_CORES=$(nproc --all)
+[ "$TOTAL_CORES" -gt 4 ] && TOTAL_CORES=4
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 EXTREME++ BMW Edition Build Engine Initiated!"
 echo "   Device: POCO F4 (munch / SM8250-AC)"
 echo "   Root Mode: $([ "$ENABLE_KSU" -eq 1 ] && echo 'BakaSU Multi-Manager + SuSFS' || echo 'Pure Clean Base')"
 echo "   Target Mode: ${TARGET_OS}"
-echo "   System Cores: ${TOTAL_CORES} (Running at Full Speed)"
+echo "   System Cores Allocated: ${TOTAL_CORES}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ------------------------------------------
@@ -57,6 +60,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "[*] Cleaning previous temporary outputs..."
 rm -rf out out_hyperos out_aosp anykernel anykernel_* EXTREME++*.zip
 find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -delete
+
+# Tắt cờ werror toàn cục cho qcacld-3.0
+sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Kbuild 2>/dev/null || true
+sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Makefile 2>/dev/null || true
 
 # ZRAM ZSTD, EXTREME+ Governor & GPU Devfreq base symbols
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
@@ -288,6 +295,7 @@ build_target_os() {
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
+        KCFLAGS="-w"
     )
 
     echo ""
@@ -507,11 +515,6 @@ build_target_os() {
     if [ "$OS" == "hyperos" ]; then
         cat > "${AK_DIR}/00-extreme-performance.sh" << 'EOF'
 #!/system/bin/sh
-# ═══════════════════════════════════════════════════════════════
-#  PROJECT EXTREME++ — HyperOS Joyose, Governor & Sniper Service
-#  POCO F4 (munch / SM8250-AC Kona) | HyperOS 1-4
-# ═══════════════════════════════════════════════════════════════
-
 (
 for queue in /sys/block/*/queue; do
     case "$queue" in
@@ -543,14 +546,12 @@ if [ -n "$RP" ]; then
     "$RP" -n ro.warranty_bit 0 2>/dev/null || true
 fi
 
-# iOS-Style QoS CPU Pinning
 echo 0-3 > /dev/cpuset/background/cpus 2>/dev/null || true
 echo 0-3 > /dev/cpuset/system-background/cpus 2>/dev/null || true
 echo 0-3 > /dev/cpuset/restricted/cpus 2>/dev/null || true
 echo 0-7 > /dev/cpuset/foreground/cpus 2>/dev/null || true
 echo 0-7 > /dev/cpuset/top-app/cpus 2>/dev/null || true
 
-# Dynamic Task Weighting
 echo 15 > /dev/stune/top-app/schedtune.boost 2>/dev/null || true
 echo 1 > /dev/stune/top-app/schedtune.prefer_idle 2>/dev/null || true
 echo 1 > /dev/stune/foreground/schedtune.prefer_idle 2>/dev/null || true
@@ -563,7 +564,6 @@ echo "50 65" > /proc/sys/kernel/sched_downmigrate 2>/dev/null || true
 echo 70 > /proc/sys/kernel/sched_group_upmigrate 2>/dev/null || true
 echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
 
-# EXTREME+ Governor Enforcement
 for p in /sys/devices/system/cpu/cpufreq/policy*; do
     if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
         echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
@@ -583,7 +583,6 @@ echo 710400 > /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq 2>/dev/nu
 echo 844800 > /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null || true
 echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
 
-# Memory & LMK Suite
 echo 100 > /proc/sys/vm/swappiness 2>/dev/null || true
 echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
 echo 15 > /proc/sys/vm/dirty_ratio 2>/dev/null || true
@@ -613,7 +612,6 @@ for queue in /sys/block/*/queue; do
     fi
 done
 
-# Network TCP BBR
 echo "bbr" > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || true
@@ -623,10 +621,8 @@ echo 1 > /proc/sys/net/ipv4/tcp_window_scaling 2>/dev/null || true
 echo 3 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null || true
 echo "fq" > /proc/sys/net/core/default_qdisc 2>/dev/null || true
 
-# Joyose Neutralizer (HyperOS ONLY)
 setprop persist.sys.joyose.thermal.disabled 1 2>/dev/null || true
 
-# Node Permissions
 chown root:system /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
 chmod 664 /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
 chown root:system /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
@@ -659,11 +655,6 @@ EOF
     else
         cat > "${AK_DIR}/00-extreme-performance.sh" << 'EOF'
 #!/system/bin/sh
-# ═══════════════════════════════════════════════════════════════
-#  PROJECT EXTREME++ — AOSP Governor & Performance Sniper Service
-#  POCO F4 (munch / SM8250-AC Kona) | AOSP Android 13–17 (A16 & A17)
-# ═══════════════════════════════════════════════════════════════
-
 (
 for queue in /sys/block/*/queue; do
     case "$queue" in
@@ -695,14 +686,12 @@ if [ -n "$RP" ]; then
     "$RP" -n ro.warranty_bit 0 2>/dev/null || true
 fi
 
-# iOS-Style QoS CPU Pinning
 echo 0-3 > /dev/cpuset/background/cpus 2>/dev/null || true
 echo 0-3 > /dev/cpuset/system-background/cpus 2>/dev/null || true
 echo 0-3 > /dev/cpuset/restricted/cpus 2>/dev/null || true
 echo 0-7 > /dev/cpuset/foreground/cpus 2>/dev/null || true
 echo 0-7 > /dev/cpuset/top-app/cpus 2>/dev/null || true
 
-# Dynamic Task Weighting (A16 & A17 uclamp cgroup v2 prioritized)
 echo 15 > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null || true
 echo 1 > /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 2>/dev/null || true
 echo 15 > /dev/stune/top-app/schedtune.boost 2>/dev/null || true
@@ -715,7 +704,6 @@ echo "50 65" > /proc/sys/kernel/sched_downmigrate 2>/dev/null || true
 echo 70 > /proc/sys/kernel/sched_group_upmigrate 2>/dev/null || true
 echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
 
-# EXTREME+ Governor Enforcement
 for p in /sys/devices/system/cpu/cpufreq/policy*; do
     if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
         echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
@@ -735,7 +723,6 @@ echo 710400 > /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq 2>/dev/nu
 echo 844800 > /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null || true
 echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
 
-# Memory & LMK Suite
 echo 100 > /proc/sys/vm/swappiness 2>/dev/null || true
 echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
 echo 15 > /proc/sys/vm/dirty_ratio 2>/dev/null || true
@@ -765,7 +752,6 @@ for queue in /sys/block/*/queue; do
     fi
 done
 
-# Network TCP BBR
 echo "bbr" > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
 echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || true
@@ -822,7 +808,6 @@ if [ -n "$RP" ]; then
     "$RP" -n ro.secureboot.lockstate locked 2>/dev/null || true
     "$RP" -n ro.boot.warranty_bit 0 2>/dev/null || true
     "$RP" -n ro.warranty_bit 0 2>/dev/null || true
-    echo "EXTREME++: Early-boot bootloader properties synced (green/locked) in post-fs-data!" > /dev/kmsg 2>/dev/null || true
 elif [ -x /data/adb/ksu/bin/ksud ]; then
     /data/adb/ksu/bin/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
     /data/adb/ksu/bin/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
@@ -854,7 +839,6 @@ device.name2=POCO F4
 supported.versions=13-17
 '; }
 
-# shell variables
 block=boot;
 is_slot_device=1;
 ramdisk_compression=auto;
@@ -884,7 +868,6 @@ dump_boot;
 ui_print "  [1/4] 🚀 Writing EXTREME++ 3.19 GHz Kernel Image...";
 write_boot;
 
-## vendor_boot DTB install
 ui_print "  [2/4] 📦 Analyzing Vendor Boot Partition...";
 block=vendor_boot;
 is_slot_device=1;
@@ -896,7 +879,6 @@ dump_boot;
 ui_print "  [2/4] 🏎️ Writing FakeDreamer Adreno 650 Undervolted DTB...";
 write_boot;
 
-# Install post-fs-data & service.d scripts into /data/adb for KSU/RKSU/Magisk/APatch
 ui_print "  [3/4] 🛡️ Checking /data Storage & Root Subsystem...";
 mount /data 2>/dev/null
 [ -d /data ] && mkdir -p /data/adb/post-fs-data.d /data/adb/service.d 2>/dev/null
