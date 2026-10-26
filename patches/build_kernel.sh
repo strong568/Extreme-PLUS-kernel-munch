@@ -109,16 +109,17 @@ fi
 if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "[*] Injecting selected KernelSU: ${KSU_PROVIDER}..."
     case "${KSU_PROVIDER}" in
-        "midori01/KernelSU"|"Midori-SU/KernelSU")
-            echo "[+] Downloading MidoriSU setup from midori01/KernelSU..."
-            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
+        "ReSukiSU/ReSukiSU"|"rsuntk/KernelSU")
+            echo "[+] Downloading ReSukiSU setup (v4.2.0-rc3)..."
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
             ;;
         "Baka-SU/BakaSU")
+            echo "[+] Downloading BakaSU setup (main)..."
             curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
             ;;
-        "rsuntk/KernelSU"|"ReSukiSU/ReSukiSU")
-            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s -- main || \
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+        "midori01/KernelSU")
+            echo "[+] Downloading MidoriSU setup from midori01/KernelSU..."
+            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         "tiann/KernelSU")
             curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s -- main
@@ -137,8 +138,8 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
             curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         *)
-            echo "[-] Fallback to midori01/KernelSU..."
-            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            echo "[-] Fallback to ReSukiSU..."
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
             ;;
     esac
 
