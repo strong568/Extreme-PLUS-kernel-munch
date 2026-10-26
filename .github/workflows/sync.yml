@@ -1,5 +1,8 @@
 name: Sync Fork (Keep My Changes)
-
+permissions:
+  contents: write
+  workflows: write
+  
 on:
   workflow_dispatch:
     inputs:
