@@ -30,7 +30,22 @@ case "$TARGET_OS" in
     *) TARGET_OS="both" ;;
 esac
 
-KSU_PROVIDER="${4:-Baka-SU/BakaSU}"
+KSU_PROVIDER="${4:-midori01/KernelSU}"
+
+# Rút gọn tên KSU Engine để đưa vào tên file zip
+KSU_SHORT_NAME="KSU"
+case "${KSU_PROVIDER}" in
+    "midori01/KernelSU"|"Midori-SU/KernelSU") KSU_SHORT_NAME="MidoriSU" ;;
+    "ReSukiSU/ReSukiSU")                     KSU_SHORT_NAME="ReSukiSU" ;;
+    "Baka-SU/BakaSU")                        KSU_SHORT_NAME="BakaSU" ;;
+    "SukiSU-Ultra/SukiSU-Ultra")             KSU_SHORT_NAME="SukiSU-Ultra" ;;
+    "KernelSU-Next/KernelSU-Next")           KSU_SHORT_NAME="KSU-Next" ;;
+    "KOWX712/KernelSU")                      KSU_SHORT_NAME="KowSU" ;;
+    "rsuntk/KernelSU")                       KSU_SHORT_NAME="rsuntkKSU" ;;
+    "backslashxx/KernelSU")                  KSU_SHORT_NAME="backslashxxKSU" ;;
+    "tiann/KernelSU")                        KSU_SHORT_NAME="OfficialKSU" ;;
+    *)                                       KSU_SHORT_NAME="KSU" ;;
+esac
 
 KERNEL_DIR="$(pwd)"
 TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
@@ -62,11 +77,9 @@ echo "[*] Cleaning previous temporary outputs..."
 rm -rf out out_hyperos out_aosp anykernel anykernel_* EXTREME++*.zip
 find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -delete
 
-# Bỏ cờ cảnh báo thành lỗi trong qcacld-3.0 tránh đơ compiler
 sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Kbuild 2>/dev/null || true
 sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Makefile 2>/dev/null || true
 
-# ZRAM ZSTD, EXTREME+ Governor & GPU Devfreq base symbols
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
 CONFIG_CRYPTO_ZSTD=y
@@ -106,20 +119,19 @@ fi
 # ------------------------------------------
 # 3. Dynamic KernelSU Provider Setup
 # ------------------------------------------
+SUSFS_VERSION="v2.3.0" # Giá trị mặc định ban đầu
+
 if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "[*] Injecting selected KernelSU: ${KSU_PROVIDER}..."
     case "${KSU_PROVIDER}" in
-        "ReSukiSU/ReSukiSU"|"rsuntk/KernelSU")
-            echo "[+] Downloading ReSukiSU setup (v4.2.0-rc3)..."
+        "midori01/KernelSU"|"Midori-SU/KernelSU")
+            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            ;;
+        "ReSukiSU/ReSukiSU")
             curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
             ;;
         "Baka-SU/BakaSU")
-            echo "[+] Downloading BakaSU setup (main)..."
             curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        "midori01/KernelSU")
-            echo "[+] Downloading MidoriSU setup from midori01/KernelSU..."
-            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         "tiann/KernelSU")
             curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s -- main
@@ -137,17 +149,35 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
         "KOWX712/KernelSU")
             curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
+        "rsuntk/KernelSU")
+            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            ;;
         *)
-            echo "[-] Fallback to ReSukiSU..."
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
     esac
+
+    # --- TỰ ĐỘNG QUÉT PHIÊN BẢN SUSFS ---
+    DETECTED_SUSFS=""
+    if [ -f "include/linux/susfs.h" ]; then
+        DETECTED_SUSFS=$(grep -m1 -E "SUSFS_VERSION[[:space:]]+\"v[0-9]" include/linux/susfs.h | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
+    fi
+    if [ -z "$DETECTED_SUSFS" ] && [ -f "fs/susfs.c" ]; then
+        DETECTED_SUSFS=$(grep -m1 -E "SUSFS_VERSION[[:space:]]+\"v[0-9]" fs/susfs.c | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
+    fi
+    if [ -z "$DETECTED_SUSFS" ]; then
+        DETECTED_SUSFS=$(grep -rohE --include="*.h" --include="*.c" "SUSFS_VERSION.*\"v[0-9][^\"]*\"" drivers/kernelsu/ fs/susfs/ include/linux/ 2>/dev/null | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" | head -n 1 || true)
+    fi
+
+    if [ -n "$DETECTED_SUSFS" ]; then
+        SUSFS_VERSION="$DETECTED_SUSFS"
+    fi
+    echo "🔎 [SuSFS Scanner] Detected SuSFS Version: ${SUSFS_VERSION}"
 
     if [ -f "drivers/kernelsu/Kconfig" ]; then
         sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig 2>/dev/null || true
     fi
 
-    # Universal Manager Signature Bypass
     python3 -c '
 import os
 candidates = [
@@ -508,13 +538,21 @@ write_boot;
 EOF
 
     local DATE_TAG="$(date +'%d%b%Y_%H%M')"
-    local ZIP_NAME="${ZIP_BASE}_$([ "$ENABLE_KSU" -eq 1 ] && echo 'KSU' || echo 'NoRoot')_${DATE_TAG}.zip"
+    local ZIP_NAME
+    if [ "$ENABLE_KSU" -eq 1 ]; then
+        # Tên file zip chứa: Tên kernel + OS + Tên KSU Engine đã chọn + Chuỗi SUSFS + Bản SuSFS quét được + Ngày build
+        ZIP_NAME="${ZIP_BASE}_${KSU_SHORT_NAME}_SUSFS_${SUSFS_VERSION}_${DATE_TAG}.zip"
+    else
+        ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
+    fi
 
     (
         cd "${AK_DIR}"
         zip -r9 "../${ZIP_NAME}" ./* -x .gitignore out/ ./*.zip > /dev/null
     )
+    echo "[+] =========================================================="
     echo "[+] SUCCESS! Package ready: ${ZIP_NAME}"
+    echo "[+] =========================================================="
 }
 
 if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
