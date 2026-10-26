@@ -17,10 +17,11 @@ on:
         description: 'Select KernelSU Source Variant'
         required: true
         type: choice
-        default: 'midori01/KernelSU'
+        default: 'ReSukiSU/ReSukiSU'
         options:
-          - 'midori01/KernelSU'
+          - 'ReSukiSU/ReSukiSU'
           - 'Baka-SU/BakaSU'
+          - 'midori01/KernelSU'
           - 'rsuntk/KernelSU'
           - 'tiann/KernelSU'
           - 'SukiSU-Ultra/SukiSU-Ultra'
@@ -182,35 +183,35 @@ jobs:
             local prefix="$2"
             echo "[*] Fetching latest APK from $repo Release..."
             local url=$(curl -s "https://api.github.com/repos/$repo/releases/latest" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
-            if [ -z "$url" ] \vert{}\vert{} [ "$url" = "null" ]; then
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
               url=$(curl -s "https://api.github.com/repos/$repo/releases" | jq -r '.[0].assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
             fi
             if [ -n "$url" ] && [ "$url" != "null" ]; then
-              echo "  [+] Downloading $prefix from$url..."
+              echo "  [+] Downloading $prefix from $url..."
               curl -sL "$url" -o "${prefix}_$(basename "$url")"
             fi
           }
 
-          # 1. MidoriSU Manager (midori01)
-          fetch_from_release "midori01/KernelSU" "MidoriSU" || fetch_from_action "midori01/KernelSU" "MidoriSU" || true
+          # 1. ReSukiSU Manager
+          fetch_from_release "ReSukiSU/ReSukiSU" "ReSukiSU" || true
 
           # 2. BakaSU Manager
           fetch_from_release "Baka-SU/BakaSU" "BakaSU" || true
 
-          # 3. SukiSU Ultra Manager
+          # 3. MidoriSU Manager (midori01)
+          fetch_from_release "midori01/KernelSU" "MidoriSU" || fetch_from_action "midori01/KernelSU" "MidoriSU" || true
+
+          # 4. SukiSU Ultra Manager
           fetch_from_release "ShirkNeko/SukiSU-Ultra" "SukiSU_Ultra" || true
 
-          # 4. KernelSU Next Manager
+          # 5. KernelSU Next Manager
           fetch_from_release "rifsxd/KernelSU-Next" "KSU_Next" || true
 
-          # 5. KernelSU Official Manager
+          # 6. KernelSU Official Manager
           fetch_from_release "tiann/KernelSU" "Official_KSU" || true
 
-          # 6. KowSU (Từ Action Artifact của KOWX712/KernelSU)
+          # 7. KowSU (Từ Action Artifact của KOWX712/KernelSU)
           fetch_from_action "KOWX712/KernelSU" "KowSU" || true
-
-          # 7. ReSukiSU Manager
-          fetch_from_release "ReSukiSU/ReSukiSU" "ReSukiSU" || true
 
           echo "✅ Danh sách toàn bộ KSU Manager đã sẵn sàng:"
           ls -lh
