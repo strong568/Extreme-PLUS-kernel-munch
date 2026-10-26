@@ -1,8 +1,13 @@
-name: "🚀 bmw Build EXTREME++ Kernel (BMW Edition - Dynamic Profiles)"
+name: "🚀 Build EXTREME++ Kernel (BMW Edition - Dynamic Profiles)"
 
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Config/Patches Repo Branch'
+        required: true
+        type: string
+        default: 'bmw_ResukiSU'
       build_ksu:
         description: 'Integrate KowSU (KOWX712 Multi-Manager & SuSFS)'
         required: true
@@ -29,6 +34,8 @@ jobs:
     steps:
       - name: "📦 Checkout config repo"
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
 
       - name: "🛠️ Install build dependencies"
         run: |
@@ -150,6 +157,8 @@ jobs:
           body: |
             ### 🚀 EXTREME++ BMW Edition (POCO F4 - munch)
             * **Build Number:** #${{ github.run_number }}
+            * **Config/Patches Branch:** ${{ inputs.branch }}
+            * **Kernel Branch:** android17-aptusitu
             * **Target OS:** ${{ inputs.target_os }}
             * **KSU Included:** ${{ inputs.build_ksu }}
             * **Toolchain:** ZyC-Clang 16.0.6 + LLD
