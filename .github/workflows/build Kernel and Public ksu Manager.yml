@@ -58,8 +58,8 @@ jobs:
             sudo ln -sf /usr/bin/python3 /usr/bin/python
           fi
 
-          git config --global user.name "PandeyJI-9"
-          git config --global user.email "pandeyji@extremeplusplus.dev"
+          git config --global user.name "strong568"
+          git config --global user.email "strong568@extremeplusplus.dev"
           git config --global color.ui false
           git config --global init.defaultBranch main
 
@@ -117,7 +117,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
           TZ: Asia/Ho_Chi_Minh
-          KBUILD_BUILD_USER: "PandeyJi"
+          KBUILD_BUILD_USER: "strong568"
           KBUILD_BUILD_HOST: "ExtremePlusPlus"
           KSU_FLAVOR: "${{ inputs.ksu_flavor }}"
         run: |
