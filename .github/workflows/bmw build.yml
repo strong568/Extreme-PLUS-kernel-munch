@@ -7,7 +7,7 @@ on:
         description: 'Config/Patches Repo Branch'
         required: true
         type: string
-        default: 'bmw_BakaSU'
+        default: 'main'
       build_ksu:
         description: 'Integrate KowSU (KOWX712 Multi-Manager & SuSFS)'
         required: true
