@@ -95,37 +95,10 @@ fi
 # ==========================================
 # FIX AUDIO CODEC TFA9874 (Missing Headers)
 # ==========================================
-echo "[*] Fixing Audio Codec TFA9874 includes..."
+echo "[*] Disabling broken TFA9874 audio codec..."
 TFA_DIR="techpack/audio/asoc/codecs/tfa9874"
-
 if [ -d "$TFA_DIR" ]; then
-    mkdir -p "${TFA_DIR}/src" "${TFA_DIR}/inc"
-    
-    # Ép compiler quét thư mục chứa header
-    if [ -f "${TFA_DIR}/Makefile" ]; then
-        # Tránh ghi đè nhiều lần nếu script chạy lại
-        sed -i '/ccflags-y += -I\$(srctree)\/'"$TFA_DIR"'\/inc/d' "${TFA_DIR}/Makefile"
-        echo "ccflags-y += -I\$(srctree)/${TFA_DIR}/inc -I\$(srctree)/${TFA_DIR}/src" >> "${TFA_DIR}/Makefile"
-    fi
-
-    # Tạo các file dummy header thường bị thiếu trong driver này
-    MISSING_HEADERS=(
-        "config.h"
-        "tfa98xx.h"
-        "tfa_device.h"
-        "tfa_ext.h"
-        "tfa_container.h"
-    )
-
-    for header in "${MISSING_HEADERS[@]}"; do
-        # Nếu file .c nào đó include header, ta comment nó lại để an toàn
-        find "$TFA_DIR" -name "*.c" -exec sed -i "s/#include \"$header\"/\/\/ #include \"$header\"/g" {} +
-        find "$TFA_DIR" -name "*.h" -exec sed -i "s/#include \"$header\"/\/\/ #include \"$header\"/g" {} +
-
-        # Đồng thời tạo file rỗng phòng hờ (nhỡ đâu có file gọi qua #include <>)
-        touch "${TFA_DIR}/src/$header"
-        touch "${TFA_DIR}/inc/$header"
-    done
+    echo "" > "${TFA_DIR}/Makefile"
 fi
 # ==========================================
 
@@ -440,6 +413,13 @@ build_target_os() {
 
     # Cấu hình .config
     scripts/config --file "${OUT_DIR}/.config" -e BBG
+    
+    # Loại bỏ hoàn toàn TFA9874 khỏi Config để an toàn tuyệt đối
+    scripts/config --file "${OUT_DIR}/.config" \
+        -d SND_SOC_TFA9874 \
+        -d SND_SOC_TFA98XX \
+        -d SND_SOC_TFA9878
+
     scripts/config --file "${OUT_DIR}/.config" \
         -e PM_DEVFREQ \
         -e DEVFREQ_GOV_SIMPLE_ONDEMAND \
