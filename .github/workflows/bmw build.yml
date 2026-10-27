@@ -304,7 +304,11 @@ jobs:
             - **Device:** POCO F4 (munch)
             - **Patches Branch:** ${{ inputs.patch_branch }}
             - **Target OS:** ${{ inputs.target_os }}
-            - **Root/SuSFS Included:** ${{ inputs.build_ksu }}
+            - **Root/SuSFS Included:** ${{ inputs.build_ksu }} (SuSFS ${{ env.SUSFS_VER }})
+
+            - **KernelSU Source:** ${{ inputs.ksu_provider }}
+            - **KSU Version:** ${{ inputs.ksu_version }}
+            
             
             **📦 Included Files:**
             - Flashable Kernel ZIPs
