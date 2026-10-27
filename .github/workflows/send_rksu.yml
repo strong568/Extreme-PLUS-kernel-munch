@@ -22,6 +22,7 @@ jobs:
         run: |
           mkdir -p apk_output
           REPOS=(
+            "midori01/KernelSU"
             "rsuntk/KernelSU"
             "tiann/KernelSU"
             "Baka-SU/BakaSU"
@@ -109,6 +110,8 @@ jobs:
                 FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
+              elif [[ "$repo" == "midori01/KernelSU" ]]; then
+                FILE_NAME="Release_midori01_${RAW_FILE_NAME}"
               else
                 FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
               fi
@@ -204,7 +207,7 @@ jobs:
                 mkdir -p "ext_${PREFIX}_${ART_NAME}"
                 unzip -q -o "temp_${PREFIX}_${ART_NAME}.zip" -d "ext_${PREFIX}_${ART_NAME}/"
 
-                # CHỈ LỌC DUY NHẤT ARM64 (ưu tiên arm64-v8a, loại bỏ debug/v7a/riscv/x86/universal)
+                # CHỈ LỌC DUY NHẤT ARM64
                 local CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
                 
                 # Fallback nếu không có đuôi -release
@@ -379,6 +382,7 @@ jobs:
           body: |
             ### 📦 KernelSU Managers Collection
             Tải tự động đầy đủ các biến thể Release và CI (Chỉ ARM64):
+            - **MidoriSU (Release):** `midori01/KernelSU`
             - **Official:** `tiann/KernelSU`
             - **Rissu / SuSFS:** `rsuntk/KernelSU`
             - **BakaSU (Release & CI ARM64):** `Baka-SU/BakaSU`
