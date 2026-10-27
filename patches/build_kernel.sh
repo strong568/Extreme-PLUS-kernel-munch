@@ -10,7 +10,7 @@ trap 'echo "❌ [ERROR] Script failed on line $LINENO"; exit 1' ERR
 
 if [ -z "$1" ]; then
     echo "[!] Error: No device specified."
-    echo "Usage: $0 <device_name> [ksu|noroot] [hyperos|aosp|both] [ksu_provider]"
+    echo "Usage: $0 <device_name> [ksu|noroot] [hyperos|aosp|both]"
     exit 1
 fi
 
@@ -30,22 +30,9 @@ case "$TARGET_OS" in
     *) TARGET_OS="both" ;;
 esac
 
+# Nhận đối số thứ 4 làm KSU_PROVIDER, mặc định là midori01/KernelSU
 KSU_PROVIDER="${4:-midori01/KernelSU}"
 
-# Rút gọn tên KSU Engine
-KSU_SHORT_NAME="KSU"
-case "${KSU_PROVIDER}" in
-    "midori01/KernelSU"|"Midori-SU/KernelSU") KSU_SHORT_NAME="MidoriSU" ;;
-    "ReSukiSU/ReSukiSU")                     KSU_SHORT_NAME="ReSukiSU" ;;
-    "Baka-SU/BakaSU")                        KSU_SHORT_NAME="BakaSU" ;;
-    "SukiSU-Ultra/SukiSU-Ultra")             KSU_SHORT_NAME="SukiSU-Ultra" ;;
-    "KernelSU-Next/KernelSU-Next")           KSU_SHORT_NAME="KSU-Next" ;;
-    "KOWX712/KernelSU")                      KSU_SHORT_NAME="KowSU" ;;
-    "rsuntk/KernelSU")                       KSU_SHORT_NAME="rsuntkKSU" ;;
-    "backslashxx/KernelSU")                  KSU_SHORT_NAME="backslashxxKSU" ;;
-    "tiann/KernelSU")                        KSU_SHORT_NAME="OfficialKSU" ;;
-    *)                                       KSU_SHORT_NAME="KSU" ;;
-esac
 
 KERNEL_DIR="$(pwd)"
 TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
@@ -60,14 +47,12 @@ export CCACHE_EXEC=$(command -v ccache)
 export USE_CCACHE=1
 
 TOTAL_CORES=$(nproc --all)
-[ "$TOTAL_CORES" -gt 4 ] && TOTAL_CORES=4
-
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 EXTREME++ BMW Edition Build Engine Initiated!"
 echo "   Device: POCO F4 (munch / SM8250-AC)"
-echo "   Root Mode: $([ "$ENABLE_KSU" -eq 1 ] && echo "${KSU_PROVIDER} Multi-Manager + SuSFS" || echo 'Pure Clean Base')"
+echo "   Root Mode: $([ "$ENABLE_KSU" -eq 1 ] && echo 'KowSU Multi-Manager + SuSFS v2.3.0' || echo 'Pure Clean Base')"
 echo "   Target Mode: ${TARGET_OS}"
-echo "   System Cores Allocated: ${TOTAL_CORES}"
+echo "   System Cores: ${TOTAL_CORES} (Running at Full Speed)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ------------------------------------------
@@ -77,31 +62,7 @@ echo "[*] Cleaning previous temporary outputs..."
 rm -rf out out_hyperos out_aosp anykernel anykernel_* EXTREME++*.zip
 find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -delete
 
-rm -rf include/config include/generated arch/arm64/include/generated
-
-# Xóa sạch -Werror và các biến thể trên toàn bộ mã nguồn kernel và driver wifi
-echo "[*] Stripping all -Werror flags across whole tree..."
-find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i -E 's/-Werror[a-zA-Z0-9_=-]*/-Wno-error/g' {} + 2>/dev/null || true
-find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
-
-# Sửa lỗi cú pháp SDCARDFS_VERSION trong sdcardfs
-if [ -f "fs/sdcardfs/main.c" ]; then
-    sed -i 's/SDCARDFS_VERSION/"2.0"/g' fs/sdcardfs/main.c
-fi
-if [ -f "fs/sdcardfs/Makefile" ]; then
-    sed -i 's/-Werror//g' fs/sdcardfs/Makefile
-fi
-
-# ==========================================
-# FIX AUDIO CODEC TFA9874 (Missing Headers)
-# ==========================================
-echo "[*] Disabling broken TFA9874 audio codec..."
-TFA_DIR="techpack/audio/asoc/codecs/tfa9874"
-if [ -d "$TFA_DIR" ]; then
-    echo "" > "${TFA_DIR}/Makefile"
-fi
-# ==========================================
-
+# ZRAM ZSTD, EXTREME+ Governor & GPU Devfreq base symbols
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
 CONFIG_CRYPTO_ZSTD=y
@@ -138,118 +99,58 @@ if ! grep -q "selinux,baseband_guard" security/Kconfig; then
     sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
 fi
 
+# Nhận đối số thứ 4 làm KSU_PROVIDER, thứ 5 làm KSU_VERSION
+KSU_PROVIDER="${4:-midori01/KernelSU}"
+KSU_VERSION="${5:-latest}"
 # ------------------------------------------
-# 3. Dynamic KernelSU Provider Setup
+# 3. KernelSU Setup
 # ------------------------------------------
-SUSFS_VERSION="v2.3.0"
-
 if [ "$ENABLE_KSU" -eq 1 ]; then
-    echo "[*] Injecting selected KernelSU: ${KSU_PROVIDER}..."
-    case "${KSU_PROVIDER}" in
-        "midori01/KernelSU"|"Midori-SU/KernelSU")
-            curl -fLSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        "ReSukiSU/ReSukiSU")
-            curl -fLSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
-            ;;
-        "Baka-SU/BakaSU")
-            curl -fLSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        "tiann/KernelSU")
-            curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        "SukiSU-Ultra/SukiSU-Ultra")
-            curl -fLSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main || \
-            curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        "backslashxx/KernelSU")
-            curl -fLSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s -- master
-            ;;
-        "KernelSU-Next/KernelSU-Next")
-            curl -fLSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s -- next
-            ;;
-        "KOWX712/KernelSU")
-            curl -fLSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        "rsuntk/KernelSU")
-            curl -fLSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s -- main
-            ;;
-        *)
-            curl -fLSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
-            ;;
-    esac
+    echo "[*] Preparing KSU Multi-Manager Source from ${KSU_PROVIDER}..."
 
-    DETECTED_SUSFS=""
-    if [ -f "include/linux/susfs.h" ]; then
-        DETECTED_SUSFS=$(grep -m1 -E "SUSFS_VERSION[[:space:]]+\"v[0-9]" include/linux/susfs.h | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
-    fi
-    if [ -z "$DETECTED_SUSFS" ] && [ -f "fs/susfs.c" ]; then
-        DETECTED_SUSFS=$(grep -m1 -E "SUSFS_VERSION[[:space:]]+\"v[0-9]" fs/susfs.c | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
-    fi
-    if [ -z "$DETECTED_SUSFS" ]; then
-        DETECTED_SUSFS=$(grep -rohE --include="*.h" --include="*.c" "SUSFS_VERSION.*\"v[0-9][^\"]*\"" drivers/kernelsu/ fs/susfs/ include/linux/ 2>/dev/null | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" | head -n 1 || true)
+    if [ "$KSU_VERSION" = "latest" ]; then
+        echo "    🔍 Đang tìm phiên bản mới nhất trên GitHub..."
+        
+        # 1. Tìm Release mới nhất
+        AUTO_VER=$(curl -sL "https://api.github.com/repos/${KSU_PROVIDER}/releases/latest" | grep -m 1 '"tag_name":' | cut -d '"' -f 4)
+        
+        # 2. Nếu không có Release, thử quét Tag mới nhất
+        if [ -z "$AUTO_VER" ] || [ "$AUTO_VER" = "null" ]; then
+            AUTO_VER=$(curl -sL "https://api.github.com/repos/${KSU_PROVIDER}/tags" | grep -m 1 '"name":' | cut -d '"' -f 4)
+        fi
+        
+        # 3. ĐẶC TRỊ CHO KOWX712: Nếu không có cả Release và Tag, quét lấy nhánh mặc định (Default Branch)
+        if [ -z "$AUTO_VER" ] || [ "$AUTO_VER" = "null" ]; then
+            echo "    ⚠️ Không có Release/Tag. Đang tự động quét nhánh mặc định (Default Branch)..."
+            AUTO_VER=$(curl -sL "https://api.github.com/repos/${KSU_PROVIDER}" | grep -m 1 '"default_branch":' | cut -d '"' -f 4)
+        fi
+        
+        # 4. Fallback cuối cùng bảo vệ script
+        if [ -z "$AUTO_VER" ] || [ "$AUTO_VER" = "null" ]; then
+            AUTO_VER="main"
+        fi
+        
+        KSU_VERSION="$AUTO_VER"
+        echo "    ✅ Đã chốt phiên bản/nhánh mã nguồn: ${KSU_VERSION}"
     fi
 
-    if [ -n "$DETECTED_SUSFS" ]; then
-        SUSFS_VERSION="$DETECTED_SUSFS"
+    echo "[*] Injecting ${KSU_PROVIDER} (Version/Branch: ${KSU_VERSION}) into Kernel..."
+    
+    # Tải setup.sh (hỗ trợ thử cả main và master) và truyền version/nhánh đã chốt
+    if ! (curl -fLSs "https://raw.githubusercontent.com/${KSU_PROVIDER}/main/kernel/setup.sh" || \
+          curl -fLSs "https://raw.githubusercontent.com/${KSU_PROVIDER}/master/kernel/setup.sh") | bash -s -- "${KSU_VERSION}"; then
+        echo "❌ [ERROR] Không thể tải setup.sh từ ${KSU_PROVIDER}."
+        exit 1
     fi
-    echo "🔎 [SuSFS Scanner] Detected SuSFS Version: ${SUSFS_VERSION}"
 
     if [ -f "drivers/kernelsu/Kconfig" ]; then
-        sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig 2>/dev/null || true
+        sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
+        echo "[+] Default hook set to KSU_SUSFS in drivers/kernelsu/Kconfig"
     fi
-
-    python3 -c '
-import os, glob
-
-ksu_dir = "drivers/kernelsu"
-if os.path.isdir(ksu_dir):
-    has_sys_read = False
-    has_init_rc = False
-    for root, _, files in os.walk(ksu_dir):
-        for f in files:
-            if f.endswith(".c"):
-                try:
-                    with open(os.path.join(root, f), "r", errors="ignore") as fp:
-                        txt = fp.read()
-                        if "ksu_handle_sys_read" in txt:
-                            has_sys_read = True
-                        if "ksu_is_init_rc_hook_enabled" in txt:
-                            has_init_rc = True
-                except:
-                    pass
-
-    missing_stubs = []
-    if not has_sys_read:
-        missing_stubs.append("""
-#include <linux/types.h>
-int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr) {
-    return 0;
-}
-""")
-    if not has_init_rc:
-        missing_stubs.append("""
-#include <linux/types.h>
-bool ksu_is_init_rc_hook_enabled = false;
-""")
-
-    if missing_stubs:
-        stub_file = os.path.join(ksu_dir, "ksu_compat_stub.c")
-        with open(stub_file, "w") as fp:
-            fp.write("// Auto-generated compatibility stubs\n" + "\n".join(missing_stubs))
-        
-        mk_file = os.path.join(ksu_dir, "Makefile")
-        if os.path.exists(mk_file):
-            with open(mk_file, "r") as fp:
-                mk_content = fp.read()
-            if "ksu_compat_stub.o" not in mk_content:
-                with open(mk_file, "a") as fp:
-                    fp.write("\nobj-y += ksu_compat_stub.o\n")
-        print("✅ Added missing KSU symbol stubs (ksu_handle_sys_read / ksu_is_init_rc_hook_enabled)")
-' 2>/dev/null || true
 
     python3 -c '
 import os
+
 candidates = [
     "drivers/kernelsu/kernel/manager/apk_sign.c",
     "drivers/kernelsu/manager/apk_sign.c",
@@ -261,7 +162,7 @@ if apk_sign_path:
         content = f.read()
 
     hook_target = "return check_v2_signature(path, signature_index);"
-    hook_replacement = """// Universal Multi-Manager Fallback
+    hook_replacement = """// Bulletproof Fallback: check known manager package names
     if (check_v2_signature(path, signature_index))
         return true;
     char pkg_buf[128];
@@ -271,9 +172,8 @@ if apk_sign_path:
             !strcmp(pkg_buf, "org.bakasu.bakasu") ||
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
-            !strcmp(pkg_buf, "com.midori.kernelsu") ||
             !strcmp(pkg_buf, "com.resukisu")) {
-            pr_info("EXTREME+: Manager recognized: %s\\n", pkg_buf);
+            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
             *signature_index = 0;
             return true;
         }
@@ -283,25 +183,28 @@ if apk_sign_path:
         content = content.replace(hook_target, hook_replacement)
         with open(apk_sign_path, "w") as f:
             f.write(content)
-        print("✅ Patched " + apk_sign_path + " with multi-manager validation")
+        print("✅ Patched " + apk_sign_path + " with universal manager package verification")
+    else:
+        print("ℹ️ " + apk_sign_path + " already patched or target signature pattern handled")
 ' 2>/dev/null || true
 
     echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "[+] KernelSU setup finished."
+    echo "[+] RKSU / ReSukiSU Multi-Manager Non-GKI setup finished."
 else
-    echo "[*] Ensuring Pure Clean Kernel Base..."
+    echo "[*] Ensuring Pure Clean Kernel Base (Zero embedded root hooks)..."
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
 fi
 
 # ------------------------------------------
-# 4. Native FakeDreamer Adreno 650 Undervolt & Speed Bins
+# 4. Native FakeDreamer Adreno 650 Undervolt & Speed Bins (150MHz - 670MHz)
 # ------------------------------------------
-echo "[*] Applying Native FakeDreamer GPU Undervolt & Speed Bins..."
+echo "[*] Applying Native FakeDreamer GPU Undervolt (150MHz - 670MHz) & Speed Bins..."
 if [ -f "kona-v2-gpu.dtsi" ]; then
     cp -f kona-v2-gpu.dtsi arch/arm64/boot/dts/vendor/qcom/kona-v2-gpu.dtsi
+    echo "[+] Copied FakeDreamer kona-v2-gpu.dtsi into kernel tree"
 fi
 
 cat > arch/arm64/boot/dts/vendor/qcom/kona-v2.1-gpu.dtsi << 'EOF'
@@ -309,17 +212,20 @@ cat > arch/arm64/boot/dts/vendor/qcom/kona-v2.1-gpu.dtsi << 'EOF'
 	qcom,chipid = <0x06050002>;
 };
 EOF
+echo "[+] kona-v2.1-gpu.dtsi set to pure FakeDreamer chipid override"
 
 # ------------------------------------------
-# 5. Inject Custom EXTREME+ Governor
+# 5. Inject Custom EXTREME+ Governor (Zero-Latency & Anti-Choke)
 # ------------------------------------------
 echo "[*] Injecting Custom EXTREME+ Governor into kernel/sched/..."
 if [ -f "cpufreq_extreme_plus.c" ]; then
     cp -f cpufreq_extreme_plus.c kernel/sched/cpufreq_extreme_plus.c
+    echo "[+] Copied cpufreq_extreme_plus.c to kernel/sched/"
 fi
 
 if ! grep -q "cpufreq_extreme_plus.o" kernel/sched/Makefile; then
     echo 'obj-$(CONFIG_CPU_FREQ_GOV_EXTREME_PLUS) += cpufreq_extreme_plus.o' >> kernel/sched/Makefile
+    echo "[+] Hooked cpufreq_extreme_plus.o into kernel/sched/Makefile"
 fi
 
 python3 -c '
@@ -332,6 +238,9 @@ gov_choice = """config CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
 \tdepends on SMP
 \tselect CPU_FREQ_GOV_EXTREME_PLUS
 \tselect CPU_FREQ_GOV_PERFORMANCE
+\thelp
+\t  Use the "extreme+" CPUFreq governor by default. Zero latency,
+\t  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
 """
 
 gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
@@ -339,6 +248,9 @@ gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
 \tdepends on CPU_FREQ && SMP
 \tselect CPU_FREQ_GOV_ATTR_SET
 \tselect IRQ_WORK
+\thelp
+\t  EXTREME+ governor based on scheduler utilization with active task
+\t  frame pacing floor, zero latency up-scaling, and 60ms decay window.
 """
 
 if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
@@ -346,36 +258,62 @@ if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
     text = text.replace("config CPU_FREQ_GOV_SCHEDUTIL", gov_def + "\nconfig CPU_FREQ_GOV_SCHEDUTIL")
     with open(path_kconfig, "w") as f:
         f.write(text)
-' 2>/dev/null || true
+    print("✅ Injected EXTREME+ governor definitions into drivers/cpufreq/Kconfig")
+else:
+    print("ℹ️ EXTREME+ governor already in drivers/cpufreq/Kconfig")
+'
 
 # ------------------------------------------
 # 6. Apply Performance, EAS, Charging & VM Patches
 # ------------------------------------------
-[ -f "apply-cpu-cap.py" ] && python3 apply-cpu-cap.py 3187200 || true
-[ -f "apply-fastcharge-bypass.py" ] && python3 apply-fastcharge-bypass.py || true
-[ -f "apply-bootloader-spoof.py" ] && python3 apply-bootloader-spoof.py . || true
-[ -f "apply-eas-tuning.py" ] && python3 apply-eas-tuning.py arch/arm64/boot/dts/vendor/qcom/kona.dtsi || true
+if [ -f "apply-cpu-cap.py" ]; then
+    echo "[*] Ensuring full-range 3.19 GHz Prime Core driver & DTS alignment..."
+    python3 apply-cpu-cap.py 3187200
+fi
+
+if [ -f "apply-fastcharge-bypass.py" ]; then
+    echo "[*] Applying safe PD/PPS Fast Charge & Thermal DTS Stepping patches..."
+    python3 apply-fastcharge-bypass.py
+fi
+
+if [ -f "apply-bootloader-spoof.py" ]; then
+    echo "[*] Applying bootloader spoofing kernel hooks..."
+    python3 apply-bootloader-spoof.py . || true
+fi
+
+if [ -f "apply-eas-tuning.py" ]; then
+    echo "[*] Applying EAS Energy Model & Capacity Margin Tuning..."
+    python3 apply-eas-tuning.py arch/arm64/boot/dts/vendor/qcom/kona.dtsi || echo "⚠️ EAS tuning failed, continuing..."
+fi
+
+if [ -f "apply-vmscan-critical.py" ]; then
+    echo "[*] Applying Critical Task Direct Reclaim Anti-Stutter Patch (Google ACK fix)..."
+    python3 apply-vmscan-critical.py mm/vmscan.c || echo "⚠️ vmscan patch skipped"
+fi
 
 if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
     sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 0;/' kernel/sched/cpufreq_schedutil.c
+    echo "[+] Schedutil up_rate_limit_us set to 0 in kernel/sched/cpufreq_schedutil.c for lightning boot"
 fi
 
 if [ -f "fs/dcache.c" ]; then
     sed -i 's/int sysctl_vfs_cache_pressure __read_mostly = [0-9]*;/int sysctl_vfs_cache_pressure __read_mostly = 50;/' fs/dcache.c
+    echo "[+] Optimized sysctl_vfs_cache_pressure to 50 in fs/dcache.c for instant app launch"
 fi
 
 # ------------------------------------------
 # 7. Clone AnyKernel3 Base Template
 # ------------------------------------------
-echo "[*] Cloning AnyKernel3 template..."
+echo "[*] Cloning AnyKernel3 base template..."
 rm -rf anykernel_template
 if ! git clone --depth=1 https://github.com/re-noroi/anykernel3-test -b munch anykernel_template; then
+    echo "[!] Fallback to AstideLabs AnyKernel3..."
     git clone --depth=1 https://github.com/AstideLabs/AnyKernel3 -b kona anykernel_template
 fi
 rm -rf anykernel_template/.git
 
 # ==============================================================================
-# MODULAR BUILD FUNCTION
+# MODULAR BUILD FUNCTION (HyperOS vs AOSP)
 # ==============================================================================
 build_target_os() {
     local OS="$1"
@@ -389,37 +327,25 @@ build_target_os() {
         LLVM_IAS=1
         CC="ccache clang"
         HOSTCC="ccache clang"
-        HOSTCFLAGS="-w"
-        HOSTCXXFLAGS="-w"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
-        KCFLAGS="-w -Wno-error -Wno-unused-function -Wno-unused-variable"
-        CFLAGS_KERNEL="-w -Wno-error"
-        CFLAGS_MODULE="-w -Wno-error"
-        EXTRA_CFLAGS="-w -Wno-error"
     )
-
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🔨 Compiling for ${DEVICE_NAME} (Target: ${OS_UPPER})"
+    echo "🔨 Starting Kernel Compilation for ${DEVICE_NAME} (Target: ${OS_UPPER})"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     rm -rf "${OUT_DIR}"
     mkdir -p "${OUT_DIR}"
-    rm -rf include/config include/generated arch/arm64/include/generated
 
+    echo "[*] Generating Defconfig (${DEFCONFIG}) for ${OS_UPPER}..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" "${DEFCONFIG}"
 
-    # Cấu hình .config
+    # 1. Baseband-guard
     scripts/config --file "${OUT_DIR}/.config" -e BBG
-    
-    # Loại bỏ hoàn toàn TFA9874 khỏi Config để an toàn tuyệt đối
-    scripts/config --file "${OUT_DIR}/.config" \
-        -d SND_SOC_TFA9874 \
-        -d SND_SOC_TFA98XX \
-        -d SND_SOC_TFA9878
 
+    # 2. Adreno TrustZone GPU Devfreq Governor & Bus Monitor
     scripts/config --file "${OUT_DIR}/.config" \
         -e PM_DEVFREQ \
         -e DEVFREQ_GOV_SIMPLE_ONDEMAND \
@@ -433,6 +359,7 @@ build_target_os() {
         -e QCOM_KGSL_IOMMU \
         --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
 
+    # 3. ZRAM ZSTD Zero-Stutter Memory Compression
     scripts/config --file "${OUT_DIR}/.config" \
         -e ZRAM \
         -e CRYPTO_ZSTD \
@@ -442,6 +369,7 @@ build_target_os() {
         -d ZRAM_DEF_COMP_LZ4 \
         --set-str ZRAM_DEF_COMP "zstd"
 
+    # 4. Ultra-Fast & Safe Boot (Zero-Latency EXTREME+ Governor)
     scripts/config --file "${OUT_DIR}/.config" \
         -e CPU_FREQ_GOV_SCHEDUTIL \
         -e CPU_FREQ_GOV_EXTREME_PLUS \
@@ -449,6 +377,7 @@ build_target_os() {
         -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
         --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
 
+    # 5. TCP BBR Congestion Control & Lightweight Gaming Tunables
     scripts/config --file "${OUT_DIR}/.config" \
         -e TCP_CONG_BBR \
         -e DEFAULT_BBR \
@@ -464,7 +393,9 @@ build_target_os() {
         -d DEBUG_KMEMLEAK \
         -d DEBUG_PREEMPT
 
+    # 6. Root Configuration (KowSU / ReSukiSU + SuSFS v2.3.0 vs Pure Clean Base)
     if [ "$ENABLE_KSU" -eq 1 ]; then
+        echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
         scripts/config --file "${OUT_DIR}/.config" \
             -e KSU \
             -e KSU_SUSFS \
@@ -484,18 +415,27 @@ build_target_os() {
             -d KSU_DISABLE_MANAGER \
             -d KSU_DISABLE_POLICY
     else
-        scripts/config --file "${OUT_DIR}/.config" -d KSU -d KSU_SUSFS
+        echo "[*] Disabling embedded KSU for Pure Clean Kernel (${OS_UPPER})..."
+        scripts/config --file "${OUT_DIR}/.config" \
+            -d KSU \
+            -d KSU_SUSFS \
+            -d KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK
         sed -i '/CONFIG_KSU/d' "${OUT_DIR}/.config" 2>/dev/null || true
     fi
 
+    # 7. Target-Specific Kernel Subsystems & Settings
     local LOCALVER
     local TITLE
     local ZIP_BASE
+    local OS_BADGE
 
     if [ "$OS" == "hyperos" ]; then
+        echo "[*] Injecting Xiaomi HyperOS / HyperOS 4 Subsystems..."
         LOCALVER="-Extreme++Gaming-HyperOS-BMW"
         TITLE="Extreme++Gaming BMW Edition [HyperOS] | POCO F4 (munch)"
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_HyperOS"
+        OS_BADGE="HyperOS 4 / HyperOS (Android 13–17)"
 
         scripts/config --file "${OUT_DIR}/.config" \
             --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
@@ -532,9 +472,11 @@ build_target_os() {
             -d REKERNEL_NETWORK \
             -d LTO_CLANG_THIN -d CFI_CLANG
     else
+        echo "[*] Injecting Clean AOSP Subsystems (Android 16 & 17 Tested & Verified)..."
         LOCALVER="-Extreme++Gaming-AOSP-BMW"
         TITLE="Extreme++Gaming BMW Edition [AOSP A16/A17] | POCO F4 (munch)"
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_AOSP"
+        OS_BADGE="AOSP Custom ROMs (Android 13–17 / A16 & A17 Tested)"
 
         scripts/config --file "${OUT_DIR}/.config" \
             --set-str STATIC_USERMODEHELPER_PATH "" \
@@ -574,10 +516,21 @@ build_target_os() {
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
 
-    echo "[*] Compiling DTBs & Images for ${OS_UPPER}..."
+    # 8. Compile Master DTB Table & DTBO
+    echo "[*] Compiling ${OS_UPPER} Master DTB Table & DTBO Image..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
+
+    # 9. Compile Master Kernel Image
+    echo "[*] Compiling ${OS_UPPER} Master Kernel Image (3.19 GHz Monster Peak)..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
 
+    if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
+        echo "❌ [ERROR] ${OS_UPPER} Master Kernel Image did NOT compile!"
+        exit 1
+    fi
+    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully ($(du -h "${OUT_DIR}/arch/arm64/boot/Image" | cut -f1))"
+
+    # 10. AnyKernel3 Packaging for Target
     local AK_DIR="${KERNEL_DIR}/anykernel_${OS}"
     rm -rf "${AK_DIR}"
     cp -r anykernel_template "${AK_DIR}"
@@ -591,7 +544,345 @@ build_target_os() {
         cat ${OUT_DIR}/arch/arm64/boot/dts/vendor/qcom/*.dtb > "${AK_DIR}/dtb"
     fi
 
+    # Post-boot performance service script
+    if [ "$OS" == "hyperos" ]; then
+        cat > "${AK_DIR}/00-extreme-performance.sh" << 'EOF'
+#!/system/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  PROJECT EXTREME++ — HyperOS Joyose, Governor & Sniper Service
+#  POCO F4 (munch / SM8250-AC Kona) | HyperOS 1-4
+# ═══════════════════════════════════════════════════════════════
+
+(
+for queue in /sys/block/*/queue; do
+    case "$queue" in
+        *zram*|*loop*) continue ;;
+        *) [ -d "$queue" ] && echo 2048 > "$queue/read_ahead_kb" 2>/dev/null || true ;;
+    esac
+done
+
+while [ "$(getprop sys.boot_completed)" != "1" ]; do
+    sleep 5
+done
+sleep 15
+
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:$PATH"
+RP="$(command -v resetprop 2>/dev/null)"
+[ -z "$RP" ] && [ -x /data/adb/ksu/bin/resetprop ] && RP="/data/adb/ksu/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/ap/bin/resetprop ] && RP="/data/adb/ap/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/magisk/resetprop ] && RP="/data/adb/magisk/resetprop"
+
+if [ -n "$RP" ]; then
+    "$RP" -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    "$RP" -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    "$RP" -n ro.boot.veritymode enforcing 2>/dev/null || true
+    "$RP" -n ro.boot.flash.locked 1 2>/dev/null || true
+    "$RP" -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    "$RP" -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    "$RP" -n ro.secureboot.lockstate locked 2>/dev/null || true
+    "$RP" -n ro.boot.warranty_bit 0 2>/dev/null || true
+    "$RP" -n ro.warranty_bit 0 2>/dev/null || true
+fi
+
+# iOS-Style QoS CPU Pinning
+echo 0-3 > /dev/cpuset/background/cpus 2>/dev/null || true
+echo 0-3 > /dev/cpuset/system-background/cpus 2>/dev/null || true
+echo 0-3 > /dev/cpuset/restricted/cpus 2>/dev/null || true
+echo 0-7 > /dev/cpuset/foreground/cpus 2>/dev/null || true
+echo 0-7 > /dev/cpuset/top-app/cpus 2>/dev/null || true
+
+# Dynamic Task Weighting
+echo 15 > /dev/stune/top-app/schedtune.boost 2>/dev/null || true
+echo 1 > /dev/stune/top-app/schedtune.prefer_idle 2>/dev/null || true
+echo 1 > /dev/stune/foreground/schedtune.prefer_idle 2>/dev/null || true
+echo 0 > /dev/stune/background/schedtune.prefer_idle 2>/dev/null || true
+echo 15 > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null || true
+echo 1 > /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 2>/dev/null || true
+
+echo "65 80" > /proc/sys/kernel/sched_upmigrate 2>/dev/null || true
+echo "50 65" > /proc/sys/kernel/sched_downmigrate 2>/dev/null || true
+echo 70 > /proc/sys/kernel/sched_group_upmigrate 2>/dev/null || true
+echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
+
+# EXTREME+ Governor Enforcement
+for p in /sys/devices/system/cpu/cpufreq/policy*; do
+    if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
+        echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
+    fi
+    for gov in extreme+ schedutil; do
+        if [ -d "$p/$gov" ]; then
+            echo 0 > "$p/$gov/up_rate_limit_us" 2>/dev/null || true
+            echo 20000 > "$p/$gov/down_rate_limit_us" 2>/dev/null || true
+            echo 65 > "$p/$gov/hispeed_load" 2>/dev/null || true
+            echo 1 > "$p/$gov/pl" 2>/dev/null || true
+        fi
+    done
+done
+
+echo 576000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
+echo 710400 > /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq 2>/dev/null || true
+echo 844800 > /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null || true
+echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
+
+# Memory & LMK Suite
+echo 100 > /proc/sys/vm/swappiness 2>/dev/null || true
+echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
+echo 15 > /proc/sys/vm/dirty_ratio 2>/dev/null || true
+echo 5 > /proc/sys/vm/dirty_background_ratio 2>/dev/null || true
+echo 16 > /proc/sys/vm/watermark_scale_factor 2>/dev/null || true
+echo 40960 > /proc/sys/vm/extra_free_kbytes 2>/dev/null || true
+echo 0 > /proc/sys/vm/page-cluster 2>/dev/null || true
+echo 750 > /proc/sys/vm/extfrag_threshold 2>/dev/null || true
+echo 20 > /proc/sys/vm/compaction_proactiveness 2>/dev/null || true
+echo 1 > /proc/sys/vm/compact_unevictable_allowed 2>/dev/null || true
+
+setprop ro.lmk.kill_heaviest_task false 2>/dev/null || true
+setprop ro.lmk.kill_timeout_ms 150 2>/dev/null || true
+setprop ro.lmk.psi_partial_stall_ms 70 2>/dev/null || true
+setprop ro.lmk.psi_complete_stall_ms 700 2>/dev/null || true
+setprop ro.lmk.swap_util_max 90 2>/dev/null || true
+setprop ro.lmk.thrashing_limit 30 2>/dev/null || true
+setprop ro.lmk.downgrade_pressure 100 2>/dev/null || true
+
+for queue in /sys/block/*/queue; do
+    if [ -d "$queue" ]; then
+        echo 0 > "$queue/iostats" 2>/dev/null || true
+        echo 512 > "$queue/read_ahead_kb" 2>/dev/null || true
+        echo 0 > "$queue/add_random" 2>/dev/null || true
+        echo 0 > "$queue/nomerges" 2>/dev/null || true
+        echo 0 > "$queue/rotational" 2>/dev/null || true
+    fi
+done
+
+# Network TCP BBR
+echo "bbr" > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_sack 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_dsack 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_window_scaling 2>/dev/null || true
+echo 3 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null || true
+echo "fq" > /proc/sys/net/core/default_qdisc 2>/dev/null || true
+
+# Joyose Neutralizer (HyperOS ONLY)
+setprop persist.sys.joyose.thermal.disabled 1 2>/dev/null || true
+
+# Node Permissions
+chown root:system /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/gpu_min_clock 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/gpu_min_clock 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/gpu_max_clock 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/gpu_max_clock 2>/dev/null || true
+chmod 444 /sys/class/kgsl/kgsl-3d0/gpubusy 2>/dev/null || true
+chmod 444 /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null || true
+
+chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null || true
+chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null || true
+chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null || true
+chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null || true
+chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
+chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
+chown root:system /sys/kernel/extreme_profile 2>/dev/null || true
+chmod 664 /sys/kernel/extreme_profile 2>/dev/null || true
+
+for f in /sys/class/qcom-battery/quick_charge_type /sys/class/power_supply/battery/fastcharge_mode; do
+    [ -f "$f" ] && echo 1 > "$f" 2>/dev/null || true
+done
+
+echo "PROJECT EXTREME++: HyperOS Beast service active!" > /dev/kmsg 2>/dev/null || true
+) &
+EOF
+    else
+        cat > "${AK_DIR}/00-extreme-performance.sh" << 'EOF'
+#!/system/bin/sh
+# ═══════════════════════════════════════════════════════════════
+#  PROJECT EXTREME++ — AOSP Governor & Performance Sniper Service
+#  POCO F4 (munch / SM8250-AC Kona) | AOSP Android 13–17 (A16 & A17)
+# ═══════════════════════════════════════════════════════════════
+
+(
+for queue in /sys/block/*/queue; do
+    case "$queue" in
+        *zram*|*loop*) continue ;;
+        *) [ -d "$queue" ] && echo 2048 > "$queue/read_ahead_kb" 2>/dev/null || true ;;
+    esac
+done
+
+while [ "$(getprop sys.boot_completed)" != "1" ]; do
+    sleep 5
+done
+sleep 15
+
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:$PATH"
+RP="$(command -v resetprop 2>/dev/null)"
+[ -z "$RP" ] && [ -x /data/adb/ksu/bin/resetprop ] && RP="/data/adb/ksu/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/ap/bin/resetprop ] && RP="/data/adb/ap/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/magisk/resetprop ] && RP="/data/adb/magisk/resetprop"
+
+if [ -n "$RP" ]; then
+    "$RP" -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    "$RP" -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    "$RP" -n ro.boot.veritymode enforcing 2>/dev/null || true
+    "$RP" -n ro.boot.flash.locked 1 2>/dev/null || true
+    "$RP" -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    "$RP" -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    "$RP" -n ro.secureboot.lockstate locked 2>/dev/null || true
+    "$RP" -n ro.boot.warranty_bit 0 2>/dev/null || true
+    "$RP" -n ro.warranty_bit 0 2>/dev/null || true
+fi
+
+# iOS-Style QoS CPU Pinning
+echo 0-3 > /dev/cpuset/background/cpus 2>/dev/null || true
+echo 0-3 > /dev/cpuset/system-background/cpus 2>/dev/null || true
+echo 0-3 > /dev/cpuset/restricted/cpus 2>/dev/null || true
+echo 0-7 > /dev/cpuset/foreground/cpus 2>/dev/null || true
+echo 0-7 > /dev/cpuset/top-app/cpus 2>/dev/null || true
+
+# Dynamic Task Weighting (A16 & A17 uclamp cgroup v2 prioritized)
+echo 15 > /dev/cpuctl/top-app/cpu.uclamp.min 2>/dev/null || true
+echo 1 > /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 2>/dev/null || true
+echo 15 > /dev/stune/top-app/schedtune.boost 2>/dev/null || true
+echo 1 > /dev/stune/top-app/schedtune.prefer_idle 2>/dev/null || true
+echo 1 > /dev/stune/foreground/schedtune.prefer_idle 2>/dev/null || true
+echo 0 > /dev/stune/background/schedtune.prefer_idle 2>/dev/null || true
+
+echo "65 80" > /proc/sys/kernel/sched_upmigrate 2>/dev/null || true
+echo "50 65" > /proc/sys/kernel/sched_downmigrate 2>/dev/null || true
+echo 70 > /proc/sys/kernel/sched_group_upmigrate 2>/dev/null || true
+echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
+
+# EXTREME+ Governor Enforcement
+for p in /sys/devices/system/cpu/cpufreq/policy*; do
+    if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
+        echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
+    fi
+    for gov in extreme+ schedutil; do
+        if [ -d "$p/$gov" ]; then
+            echo 0 > "$p/$gov/up_rate_limit_us" 2>/dev/null || true
+            echo 20000 > "$p/$gov/down_rate_limit_us" 2>/dev/null || true
+            echo 65 > "$p/$gov/hispeed_load" 2>/dev/null || true
+            echo 1 > "$p/$gov/pl" 2>/dev/null || true
+        fi
+    done
+done
+
+echo 576000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq 2>/dev/null || true
+echo 710400 > /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq 2>/dev/null || true
+echo 844800 > /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null || true
+echo Y > /sys/module/workqueue/parameters/power_efficient 2>/dev/null || true
+
+# Memory & LMK Suite
+echo 100 > /proc/sys/vm/swappiness 2>/dev/null || true
+echo 50 > /proc/sys/vm/vfs_cache_pressure 2>/dev/null || true
+echo 15 > /proc/sys/vm/dirty_ratio 2>/dev/null || true
+echo 5 > /proc/sys/vm/dirty_background_ratio 2>/dev/null || true
+echo 16 > /proc/sys/vm/watermark_scale_factor 2>/dev/null || true
+echo 40960 > /proc/sys/vm/extra_free_kbytes 2>/dev/null || true
+echo 0 > /proc/sys/vm/page-cluster 2>/dev/null || true
+echo 750 > /proc/sys/vm/extfrag_threshold 2>/dev/null || true
+echo 20 > /proc/sys/vm/compaction_proactiveness 2>/dev/null || true
+echo 1 > /proc/sys/vm/compact_unevictable_allowed 2>/dev/null || true
+
+setprop ro.lmk.kill_heaviest_task false 2>/dev/null || true
+setprop ro.lmk.kill_timeout_ms 150 2>/dev/null || true
+setprop ro.lmk.psi_partial_stall_ms 70 2>/dev/null || true
+setprop ro.lmk.psi_complete_stall_ms 700 2>/dev/null || true
+setprop ro.lmk.swap_util_max 90 2>/dev/null || true
+setprop ro.lmk.thrashing_limit 30 2>/dev/null || true
+setprop ro.lmk.downgrade_pressure 100 2>/dev/null || true
+
+for queue in /sys/block/*/queue; do
+    if [ -d "$queue" ]; then
+        echo 0 > "$queue/iostats" 2>/dev/null || true
+        echo 512 > "$queue/read_ahead_kb" 2>/dev/null || true
+        echo 0 > "$queue/add_random" 2>/dev/null || true
+        echo 0 > "$queue/nomerges" 2>/dev/null || true
+        echo 0 > "$queue/rotational" 2>/dev/null || true
+    fi
+done
+
+# Network TCP BBR
+echo "bbr" > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_low_latency 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_sack 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_dsack 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv4/tcp_window_scaling 2>/dev/null || true
+echo 3 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null || true
+echo "fq" > /proc/sys/net/core/default_qdisc 2>/dev/null || true
+
+chown root:system /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/devfreq/governor 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/force_bus_on 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/force_clk_on 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/gpu_min_clock 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/gpu_min_clock 2>/dev/null || true
+chown root:system /sys/class/kgsl/kgsl-3d0/gpu_max_clock 2>/dev/null || true
+chmod 664 /sys/class/kgsl/kgsl-3d0/gpu_max_clock 2>/dev/null || true
+chmod 444 /sys/class/kgsl/kgsl-3d0/gpubusy 2>/dev/null || true
+chmod 444 /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null || true
+
+chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null || true
+chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_governor 2>/dev/null || true
+chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null || true
+chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_min_freq 2>/dev/null || true
+chown root:system /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
+chmod 664 /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq 2>/dev/null || true
+chown root:system /sys/kernel/extreme_profile 2>/dev/null || true
+chmod 664 /sys/kernel/extreme_profile 2>/dev/null || true
+
+echo "PROJECT EXTREME++: AOSP Beast service active!" > /dev/kmsg 2>/dev/null || true
+) &
+EOF
+    fi
+    chmod 755 "${AK_DIR}/00-extreme-performance.sh"
+
+    # Early-boot props script
+    cat > "${AK_DIR}/00-extreme-props.sh" << 'EOF'
+#!/system/bin/sh
+export PATH="/data/adb/ksu/bin:/data/adb/ap/bin:/data/adb/magisk:$PATH"
+RP="$(command -v resetprop 2>/dev/null)"
+[ -z "$RP" ] && [ -x /data/adb/ksu/bin/resetprop ] && RP="/data/adb/ksu/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/ap/bin/resetprop ] && RP="/data/adb/ap/bin/resetprop"
+[ -z "$RP" ] && [ -x /data/adb/magisk/resetprop ] && RP="/data/adb/magisk/resetprop"
+
+if [ -n "$RP" ]; then
+    "$RP" -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    "$RP" -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    "$RP" -n ro.boot.veritymode enforcing 2>/dev/null || true
+    "$RP" -n ro.boot.flash.locked 1 2>/dev/null || true
+    "$RP" -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    "$RP" -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    "$RP" -n ro.secureboot.lockstate locked 2>/dev/null || true
+    "$RP" -n ro.boot.warranty_bit 0 2>/dev/null || true
+    "$RP" -n ro.warranty_bit 0 2>/dev/null || true
+    echo "EXTREME++: Early-boot bootloader properties synced (green/locked) in post-fs-data!" > /dev/kmsg 2>/dev/null || true
+elif [ -x /data/adb/ksu/bin/ksud ]; then
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.verifiedbootstate green 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.vbmeta.device_state locked 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.veritymode enforcing 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.flash.locked 1 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.bootloader.locked 1 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n sys.oem_unlock_allowed 0 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.secureboot.lockstate locked 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.boot.warranty_bit 0 2>/dev/null || true
+    /data/adb/ksu/bin/ksud resetprop -n ro.warranty_bit 0 2>/dev/null || true
+fi
+EOF
+    chmod 755 "${AK_DIR}/00-extreme-props.sh"
+
+    # anykernel.sh for target
     cat > "${AK_DIR}/anykernel.sh" << EOF
+### AnyKernel3 Ramdisk Mod Script
+## EXTREME++ ${OS_UPPER} Kernel for POCO F4 (munch) - BMW Edition
+
 properties() { '
 kernel.string=${TITLE}
 do.devicecheck=0
@@ -603,28 +894,81 @@ device.name1=munch
 device.name2=POCO F4
 supported.versions=13-17
 '; }
+
+# shell variables
 block=boot;
 is_slot_device=1;
 ramdisk_compression=auto;
 patch_vbmeta_flag=0;
+
 . tools/ak3-core.sh;
+
 ui_print " ";
-ui_print " Flash EXTREME++ BMW Edition (${OS_UPPER})";
+ui_print " ══════════════════════════════════════════════";
+ui_print "   ______      __                              ";
+ui_print "  / ____/  __ / /_ _____ ___   ____ ___ ___    ";
+ui_print " / __/ | |/_// __// ___// _ \\ / __ '__// _ \\   ";
+ui_print "/ /___ _>  < / /_ / /   /  __// / / / /  __/   ";
+ui_print "\\____//_/|_| \\__//_/    \\___//_/ /_/ / \\___/   ";
+ui_print "                 [ + + ]                       ";
+ui_print " ══════════════════════════════════════════════";
+ui_print "  🏎️  EDITION : BMW Gaming Edition (${OS_UPPER}) ";
+ui_print "  👑  AUTHOR  : Extreme++ by @pandey_ji_8      ";
+ui_print "  📱  DEVICE  : POCO F4 (munch) | ${OS_UPPER}  ";
+ui_print "  ⚡  CLOCK   : 3.19 GHz Unlocked Monster Peak ";
+ui_print "  🚀  PROFILES: In-Kernel Dynamic Switcher     ";
+ui_print " ══════════════════════════════════════════════";
+ui_print " ";
+
+ui_print "  [1/4] ⚡ Extracting & Patching Boot Partition...";
 dump_boot;
+ui_print "  [1/4] 🚀 Writing EXTREME++ 3.19 GHz Kernel Image...";
 write_boot;
+
+## vendor_boot DTB install
+ui_print "  [2/4] 📦 Analyzing Vendor Boot Partition...";
 block=vendor_boot;
 is_slot_device=1;
 ramdisk_compression=auto;
 patch_vbmeta_flag=0;
+
 reset_ak;
 dump_boot;
+ui_print "  [2/4] 🏎️ Writing FakeDreamer Adreno 650 Undervolted DTB...";
 write_boot;
+
+# Install post-fs-data & service.d scripts into /data/adb for KSU/RKSU/Magisk/APatch
+ui_print "  [3/4] 🛡️ Checking /data Storage & Root Subsystem...";
+mount /data 2>/dev/null
+[ -d /data ] && mkdir -p /data/adb/post-fs-data.d /data/adb/service.d 2>/dev/null
+if [ -d /data/adb ]; then
+    mkdir -p /data/adb/post-fs-data.d
+    mkdir -p /data/adb/service.d
+    ui_print "  [3/4] 💉 Installing Early Bootloader Lock Guard (post-fs-data)...";
+    cp -f 00-extreme-props.sh /data/adb/post-fs-data.d/00-extreme-props.sh 2>/dev/null || cp -f \$home/00-extreme-props.sh /data/adb/post-fs-data.d/00-extreme-props.sh 2>/dev/null
+    chmod 755 /data/adb/post-fs-data.d/00-extreme-props.sh
+    chown root:root /data/adb/post-fs-data.d/00-extreme-props.sh 2>/dev/null
+
+    ui_print "  [3/4] ⚙️ Installing Performance Optimizer & Dynamic Profiles (service.d)...";
+    cp -f 00-extreme-performance.sh /data/adb/service.d/00-extreme-performance.sh 2>/dev/null || cp -f \$home/00-extreme-performance.sh /data/adb/service.d/00-extreme-performance.sh 2>/dev/null
+    chmod 755 /data/adb/service.d/00-extreme-performance.sh
+    chown root:root /data/adb/service.d/00-extreme-performance.sh 2>/dev/null
+fi
+
+ui_print "  [4/4] ✨ Preserving OEM Display Calibrations & Finalizing...";
+ui_print " ";
+ui_print " ══════════════════════════════════════════════";
+ui_print "  🎉 Extreme++ Kernel (${OS_UPPER}) Flashed!  ";
+ui_print "  🏎️ BMW Edition is Ready to Rock!             ";
+ui_print " ══════════════════════════════════════════════";
+ui_print " ";
 EOF
 
+    # Package into flashable ZIP
     local DATE_TAG="$(date +'%d%b%Y_%H%M')"
     local ZIP_NAME
     if [ "$ENABLE_KSU" -eq 1 ]; then
-        ZIP_NAME="${ZIP_BASE}_${KSU_SHORT_NAME}_SUSFS_${SUSFS_VERSION}_${DATE_TAG}.zip"
+        ZIP_NAME="${ZIP_BASE}_KowSU_${DATE_TAG}.zip"
     else
         ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
     fi
@@ -633,11 +977,15 @@ EOF
         cd "${AK_DIR}"
         zip -r9 "../${ZIP_NAME}" ./* -x .gitignore out/ ./*.zip > /dev/null
     )
+
     echo "[+] =========================================================="
-    echo "[+] SUCCESS! Package ready: ${ZIP_NAME}"
+    echo "[+] SUCCESS! ${OS_UPPER} package ready: ${ZIP_NAME}"
     echo "[+] =========================================================="
 }
 
+# ==============================================================================
+# EXECUTE REQUESTED TARGET BUILDS
+# ==============================================================================
 if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
     build_target_os "hyperos"
 fi
@@ -646,7 +994,8 @@ if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
     build_target_os "aosp"
 fi
 
+echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🎉 ALL BUILDS COMPLETED SUCCESSFULLY!"
+echo "🎉 ALL REQUESTED EXTREME++ BUILDS COMPLETED SUCCESSFULLY!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 exit 0
