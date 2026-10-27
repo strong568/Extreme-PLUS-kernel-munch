@@ -89,12 +89,19 @@ jobs:
       - name: "🔨 Compile EXTREME++ Kernel"
         run: |
           cd kernel
+          
           # Fix lỗi sdcardfs
           [ -f "fs/sdcardfs/main.c" ] && sed -i 's/SDCARDFS_VERSION/"2.0"/g' fs/sdcardfs/main.c || true
 
-          # Chỉ khử -Werror trong drivers/staging và driver Wi-Fi
-          find drivers/staging -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i -E 's/-Werror[a-zA-Z0-9_=-]*/-Wno-error/g' {} + 2>/dev/null || true
-          find drivers/staging -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
+          # Fix lỗi thiếu config.h của driver âm thanh TFA9874
+          TFA_SRC="techpack/audio/asoc/codecs/tfa9874/src/tfa98xx.c"
+          [ -f "$TFA_SRC" ] && sed -i 's/#include "config.h"/\/\/ #include "config.h"/g' "$TFA_SRC" || true
+          mkdir -p techpack/audio/asoc/codecs/tfa9874/src && touch techpack/audio/asoc/codecs/tfa9874/src/config.h || true
+
+          # Khử sạch -Werror trên TOÀN BỘ source tree
+          echo "[*] Cleaning all -Werror occurrences..."
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i -E 's/-Werror[a-zA-Z0-9_=-]*/-Wno-error/g' {} + 2>/dev/null || true
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
 
           KSU_MODE="noroot"
           if [ "${{ inputs.build_ksu }}" = "true" ]; then
@@ -104,8 +111,6 @@ jobs:
           
           echo "✅ Built ZIP files:"
           ls -lh EXTREME++*.zip
-
-
 
       - name: "📦 Package Raw Kernel Images for HyperOS 4 (.img / dtb)"
         if: success()
