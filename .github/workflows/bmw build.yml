@@ -74,7 +74,6 @@ jobs:
           cp patches/* kernel/
           chmod +x kernel/build_kernel.sh
 
-      # 🔥 FIX 2: THE MASTER ZRAM/SWAP HACK (Fixed for GitHub OverlayFS)
       - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
         run: |
           echo "[*] Checking current RAM..."
@@ -90,6 +89,9 @@ jobs:
       - name: "🔨 Compile EXTREME++ Kernel"
         run: |
           cd kernel
+          # Xóa bỏ hoàn toàn -Werror trên mọi Makefile/Kbuild của staging & Wi-Fi
+          find drivers/staging -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
+
           KSU_MODE="noroot"
           if [ "${{ inputs.build_ksu }}" = "true" ]; then
             KSU_MODE="ksu"
@@ -166,9 +168,6 @@ jobs:
             "KernelSU-Next/KernelSU-Next"
           )
 
-          # ----------------------------------------------------
-          # 1. Quét Releases từ các repo GitHub thông thường
-          # ----------------------------------------------------
           for repo in "${REPOS[@]}"; do
             echo "========================================"
             echo "[*] Processing Release: $repo"
@@ -177,7 +176,6 @@ jobs:
             API_URL="https://api.github.com/repos/${repo}/releases"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
 
-            # Xử lý riêng BakaSU và ReSukiSU ở repo Baka-SU/BakaSU
             if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
               BAKA_REL_URL=$(echo "$DATA" | jq -r '
                 [ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
@@ -237,9 +235,6 @@ jobs:
             fi
           done
 
-          # ----------------------------------------------------
-          # 2. Lấy 3 APK Action từ Baka-SU/BakaSU (Chỉ ARM64: Main, PR, ReSukiSU)
-          # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU..."
 
@@ -248,7 +243,6 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-          # 1. Run ID của BakaSU-PR
           BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
             [ .workflow_runs[] | select(
                 ((.event == "pull_request") or (.head_branch | test("pr|pull"; "i")) or (.display_title | test("pr|pull request"; "i"))) and
@@ -256,7 +250,6 @@ jobs:
             ) ] | first | .id // empty
           ')
 
-          # 2. Run ID của ReSukiSU
           RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
             [ .workflow_runs[] | select(
                 ((.head_branch | test("resuki"; "i")) or (.name | test("resuki"; "i")) or (.display_title | test("resuki"; "i"))) and
@@ -264,7 +257,6 @@ jobs:
             ) ] | first | .id // empty
           ')
 
-          # 3. Run ID của BakaSU Main
           BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
             [ .workflow_runs[] | select(
                 (.event != "pull_request") and
@@ -291,7 +283,7 @@ jobs:
 
             [ -z "$R_ID" ] && return 0
 
-            echo "[⬇️] Processing $PREFIX (Run ID: $R_ID)..."
+            echo "[⬇️] Processing $PREFIX (Run ID:$R_ID)..."
             local ART_JSON=$(curl -sL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
@@ -332,9 +324,6 @@ jobs:
           fetch_bakasu_action "$BAKASU_PR_RUN_ID"   "Action_BakaSU_PR"
           fetch_bakasu_action "$RESUKISU_RUN_ID"    "Action_ReSukiSU"
 
-          # ----------------------------------------------------
-          # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions (Chỉ ARM64)
-          # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching latest artifact from SukiSU-Ultra/SukiSU-Ultra actions..."
 
@@ -382,9 +371,6 @@ jobs:
             fi
           fi
 
-          # ----------------------------------------------------
-          # 4. Lấy APK mới nhất từ KOWX712 Actions Artifacts
-          # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching latest artifact from KOWX712/KernelSU actions..."
 
