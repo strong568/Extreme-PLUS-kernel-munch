@@ -84,6 +84,14 @@ echo "[*] Stripping all -Werror flags across whole tree..."
 find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i -E 's/-Werror[a-zA-Z0-9_=-]*/-Wno-error/g' {} + 2>/dev/null || true
 find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
 
+# Sửa lỗi cú pháp SDCARDFS_VERSION trong sdcardfs
+if [ -f "fs/sdcardfs/main.c" ]; then
+    sed -i 's/SDCARDFS_VERSION/"2.0"/g' fs/sdcardfs/main.c
+fi
+if [ -f "fs/sdcardfs/Makefile" ]; then
+    sed -i 's/-Werror//g' fs/sdcardfs/Makefile
+fi
+
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
 CONFIG_CRYPTO_ZSTD=y
