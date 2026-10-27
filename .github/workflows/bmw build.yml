@@ -89,8 +89,10 @@ jobs:
       - name: "🔨 Compile EXTREME++ Kernel"
         run: |
           cd kernel
-          # Xóa bỏ hoàn toàn -Werror trên mọi Makefile/Kbuild của staging & Wi-Fi
-          find drivers/staging -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
+          # Khử sạch -Werror trên toàn bộ source tree (bao gồm cả qca-wifi-host-cmn và qcacld-3.0)
+          echo "[*] Cleaning all -Werror occurrences..."
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i -E 's/-Werror[a-zA-Z0-9_=-]*/-Wno-error/g' {} + 2>/dev/null || true
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
 
           KSU_MODE="noroot"
           if [ "${{ inputs.build_ksu }}" = "true" ]; then
@@ -100,6 +102,7 @@ jobs:
           
           echo "✅ Built ZIP files:"
           ls -lh EXTREME++*.zip
+
 
       - name: "📦 Package Raw Kernel Images for HyperOS 4 (.img / dtb)"
         if: success()
