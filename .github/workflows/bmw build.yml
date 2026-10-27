@@ -93,13 +93,16 @@ jobs:
           # Fix lỗi sdcardfs
           [ -f "fs/sdcardfs/main.c" ] && sed -i 's/SDCARDFS_VERSION/"2.0"/g' fs/sdcardfs/main.c || true
 
-          # Fix lỗi audio codec TFA9874
+          # Fix triệt để lỗi audio codec TFA9874 (tạo dummy headers)
           TFA_DIR="techpack/audio/asoc/codecs/tfa9874"
           if [ -d "$TFA_DIR" ]; then
-              [ -f "${TFA_DIR}/src/tfa98xx.c" ] && sed -i 's/#include "config.h"/\/\/ #include "config.h"/g' "${TFA_DIR}/src/tfa98xx.c" || true
+              mkdir -p "${TFA_DIR}/src" "${TFA_DIR}/inc"
               [ -f "${TFA_DIR}/Makefile" ] && echo "ccflags-y += -I\$(srctree)/${TFA_DIR}/inc -I\$(srctree)/${TFA_DIR}/src" >> "${TFA_DIR}/Makefile" || true
-              find "$TFA_DIR" -name "tfa98xx.h" -exec cp {} "${TFA_DIR}/src/" \; 2>/dev/null || true
-              touch "${TFA_DIR}/src/tfa98xx.h" "${TFA_DIR}/inc/tfa98xx.h" || true
+              
+              for header in "config.h" "tfa98xx.h" "tfa_device.h" "tfa_ext.h" "tfa_container.h"; do
+                  find "$TFA_DIR" -name "*.[ch]" -exec sed -i "s/#include \"$header\"/\/\/ #include \"$header\"/g" {} + || true
+                  touch "${TFA_DIR}/src/$header" "${TFA_DIR}/inc/$header" || true
+              done
           fi
 
           # Khử sạch -Werror trên TOÀN BỘ source tree
