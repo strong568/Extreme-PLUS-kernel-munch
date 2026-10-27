@@ -1,4 +1,4 @@
-name: "🚀 Build bmw EXTREME++ Kernel (BMW Edition - Dynamic Profiles)"
+name: "🚀 Build bmw EXTREME++ Kernel & Release"
 
 on:
   workflow_dispatch:
