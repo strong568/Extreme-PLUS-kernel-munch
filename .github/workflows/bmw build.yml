@@ -93,17 +93,9 @@ jobs:
           # Fix lỗi sdcardfs
           [ -f "fs/sdcardfs/main.c" ] && sed -i 's/SDCARDFS_VERSION/"2.0"/g' fs/sdcardfs/main.c || true
 
-          # Fix triệt để lỗi audio codec TFA9874 (tạo dummy headers)
+          # Vô hiệu hóa hoàn toàn module âm thanh TFA9874 (rác của Xiaomi, gây lỗi missing header)
           TFA_DIR="techpack/audio/asoc/codecs/tfa9874"
-          if [ -d "$TFA_DIR" ]; then
-              mkdir -p "${TFA_DIR}/src" "${TFA_DIR}/inc"
-              [ -f "${TFA_DIR}/Makefile" ] && echo "ccflags-y += -I\$(srctree)/${TFA_DIR}/inc -I\$(srctree)/${TFA_DIR}/src" >> "${TFA_DIR}/Makefile" || true
-              
-              for header in "config.h" "tfa98xx.h" "tfa_device.h" "tfa_ext.h" "tfa_container.h"; do
-                  find "$TFA_DIR" -name "*.[ch]" -exec sed -i "s/#include \"$header\"/\/\/ #include \"$header\"/g" {} + || true
-                  touch "${TFA_DIR}/src/$header" "${TFA_DIR}/inc/$header" || true
-              done
-          fi
+          [ -d "$TFA_DIR" ] && echo "" > "${TFA_DIR}/Makefile" || true
 
           # Khử sạch -Werror trên TOÀN BỘ source tree
           echo "[*] Cleaning all -Werror occurrences..."
