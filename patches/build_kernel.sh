@@ -79,8 +79,10 @@ find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -dele
 
 rm -rf include/config include/generated arch/arm64/include/generated
 
-# XÓA TRIỆT ĐỂ -Werror TRÊN TẤT CẢ DRIVER STAGING VÀ WI-FI
-find drivers/staging -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
+# Xóa sạch -Werror và các biến thể trên toàn bộ mã nguồn kernel và driver wifi
+echo "[*] Stripping all -Werror flags across whole tree..."
+find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i -E 's/-Werror[a-zA-Z0-9_=-]*/-Wno-error/g' {} + 2>/dev/null || true
+find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
 
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
@@ -373,9 +375,12 @@ build_target_os() {
         HOSTCXXFLAGS="-w"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
-        KCFLAGS="-w -Wno-error"
-        CFLAGS_KERNEL="-w"
+        KCFLAGS="-w -Wno-error -Wno-unused-function -Wno-unused-variable"
+        CFLAGS_KERNEL="-w -Wno-error"
+        CFLAGS_MODULE="-w -Wno-error"
+        EXTRA_CFLAGS="-w -Wno-error"
     )
+
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
