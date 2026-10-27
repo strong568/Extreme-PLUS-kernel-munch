@@ -166,7 +166,9 @@ jobs:
             "KernelSU-Next/KernelSU-Next"
           )
 
-          # 1. Quét Releases từ các repo GitHub
+          # ----------------------------------------------------
+          # 1. Quét Releases từ các repo GitHub thông thường
+          # ----------------------------------------------------
           for repo in "${REPOS[@]}"; do
             echo "========================================"
             echo "[*] Processing Release: $repo"
@@ -175,15 +177,31 @@ jobs:
             API_URL="https://api.github.com/repos/${repo}/releases"
             DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
 
+            # Xử lý riêng BakaSU và ReSukiSU ở repo Baka-SU/BakaSU
             if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
-              BAKA_REL_URL=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty')
-              BAKA_REL_NAME=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .name // empty')
+              BAKA_REL_URL=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
+              ')
+              BAKA_REL_NAME=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .name // empty
+              ')
 
-              RESUKI_REL_URL=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty')
-              RESUKI_REL_NAME=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .name // empty')
+              RESUKI_REL_URL=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty
+              ')
+              RESUKI_REL_NAME=$(echo "$DATA" | jq -r '
+                [ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .name // empty
+              ')
 
-              [ -n "$BAKA_REL_URL" ] && curl -fLSs -o "Release_BakaSU_${BAKA_REL_NAME}" "$BAKA_REL_URL" || true
-              [ -n "$RESUKI_REL_URL" ] && curl -fLSs -o "Release_ReSukiSU_${RESUKI_REL_NAME}" "$RESUKI_REL_URL" || true
+              if [ -n "$BAKA_REL_URL" ]; then
+                echo "⬇️ Downloading: Release_BakaSU_${BAKA_REL_NAME}"
+                curl -fLSs -o "Release_BakaSU_${BAKA_REL_NAME}" "$BAKA_REL_URL" || true
+              fi
+
+              if [ -n "$RESUKI_REL_URL" ]; then
+                echo "⬇️ Downloading: Release_ReSukiSU_${RESUKI_REL_NAME}"
+                curl -fLSs -o "Release_ReSukiSU_${RESUKI_REL_NAME}" "$RESUKI_REL_URL" || true
+              fi
               continue
             fi
 
@@ -209,46 +227,102 @@ jobs:
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
               elif [[ "$repo" == "midori01/KernelSU" ]]; then
-                FILE_NAME="MidoriSU_${RAW_FILE_NAME}"
+                FILE_NAME="Release_midori01_${RAW_FILE_NAME}"
               else
                 FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
               fi
+
               echo "⬇️ Downloading: $FILE_NAME"
               curl -fLSs -o "$FILE_NAME" "$APK_URL" || true
             fi
           done
 
-          # 2. Quét Actions Runs từ Baka-SU/BakaSU (ARM64: Main, PR, ReSukiSU)
+          # ----------------------------------------------------
+          # 2. Lấy 3 APK Action từ Baka-SU/BakaSU (Chỉ ARM64: Main, PR, ReSukiSU)
+          # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU..."
-          BAKA_RUNS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-          BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.event == "pull_request") or (.head_branch | test("pr|pull"; "i")) or (.display_title | test("pr|pull request"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
-          RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.head_branch | test("resuki"; "i")) or (.name | test("resuki"; "i")) or (.display_title | test("resuki"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
-          BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select((.event != "pull_request") and (.head_branch | test("main|master"; "i")) and ((.head_branch | test("resuki"; "i") | not) and (.display_title | test("resuki"; "i") | not)) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+          BAKA_RUNS_JSON=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
+
+          # 1. Run ID của BakaSU-PR
+          BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+            [ .workflow_runs[] | select(
+                ((.event == "pull_request") or (.head_branch | test("pr|pull"; "i")) or (.display_title | test("pr|pull request"; "i"))) and
+                (.name | test("build.*manager|manager|ci"; "i"))
+            ) ] | first | .id // empty
+          ')
+
+          # 2. Run ID của ReSukiSU
+          RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+            [ .workflow_runs[] | select(
+                ((.head_branch | test("resuki"; "i")) or (.name | test("resuki"; "i")) or (.display_title | test("resuki"; "i"))) and
+                (.name | test("build.*manager|manager|ci"; "i"))
+            ) ] | first | .id // empty
+          ')
+
+          # 3. Run ID của BakaSU Main
+          BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+            [ .workflow_runs[] | select(
+                (.event != "pull_request") and
+                (.head_branch | test("main|master"; "i")) and
+                ((.head_branch | test("resuki"; "i") | not) and (.display_title | test("resuki"; "i") | not)) and
+                (.name | test("build.*manager|manager|ci"; "i"))
+            ) ] | first | .id // empty
+          ')
+
+          if [ -z "$BAKASU_MAIN_RUN_ID" ]; then
+            BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
+              [ .workflow_runs[] | select(
+                  .id != "'"$BAKASU_PR_RUN_ID"'" and .id != "'"$RESUKISU_RUN_ID"'" and
+                  (.name | test("build.*manager|manager|ci"; "i"))
+              ) ] | first | .id // empty
+            ')
+          fi
+
+          echo "[*] Detected Runs: Main=${BAKASU_MAIN_RUN_ID:-None}, PR=${BAKASU_PR_RUN_ID:-None}, ReSukiSU=${RESUKISU_RUN_ID:-None}"
 
           fetch_bakasu_action() {
             local R_ID="$1"
             local PREFIX="$2"
+
             [ -z "$R_ID" ] && return 0
 
-            local ART_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${R_ID}/artifacts")
+            echo "[⬇️] Processing $PREFIX (Run ID: $R_ID)..."
+            local ART_JSON=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${R_ID}/artifacts")
+
             echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk"; "i"))' | while read -r art; do
               local ART_NAME=$(echo "$art" | jq -r '.name')
               local ART_URL=$(echo "$art" | jq -r '.archive_download_url')
 
-              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -o "temp_${PREFIX}_${ART_NAME}.zip" "$ART_URL"
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "temp_${PREFIX}_${ART_NAME}.zip" \
+                "$ART_URL" || true
+
               if [ -s "temp_${PREFIX}_${ART_NAME}.zip" ]; then
                 mkdir -p "ext_${PREFIX}_${ART_NAME}"
-                unzip -q -o "temp_${PREFIX}_${ART_NAME}.zip" -d "ext_${PREFIX}_${ART_NAME}/"
+                unzip -q -o "temp_${PREFIX}_${ART_NAME}.zip" -d "ext_${PREFIX}_${ART_NAME}/" || true
+
                 local CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
-                [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                if [ -z "$CHOSEN_APK" ]; then
+                  CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                fi
 
                 if [ -n "$CHOSEN_APK" ]; then
-                  local FINAL_NAME="${PREFIX}_$(basename "$CHOSEN_APK")"
+                  local RAW_NAME=$(basename "$CHOSEN_APK")
+                  local FINAL_NAME="${PREFIX}_${RAW_NAME}"
                   cp "$CHOSEN_APK" "$FINAL_NAME"
-                  echo "✅ Saved: $FINAL_NAME"
+                  echo "✅ Saved (ARM64): $FINAL_NAME"
                 fi
+
                 rm -rf "temp_${PREFIX}_${ART_NAME}.zip" "ext_${PREFIX}_${ART_NAME}"
               fi
             done
@@ -258,39 +332,98 @@ jobs:
           fetch_bakasu_action "$BAKASU_PR_RUN_ID"   "Action_BakaSU_PR"
           fetch_bakasu_action "$RESUKISU_RUN_ID"    "Action_ReSukiSU"
 
-          # 3. Quét Action Artifact từ SukiSU-Ultra/SukiSU-Ultra
+          # ----------------------------------------------------
+          # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions (Chỉ ARM64)
+          # ----------------------------------------------------
           echo "========================================"
-          echo "[*] Fetching latest artifact from SukiSU-Ultra..."
-          SUKI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '([ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first) // .workflow_runs[0].id // empty')
+          echo "[*] Fetching latest artifact from SukiSU-Ultra/SukiSU-Ultra actions..."
+
+          SUKI_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=5" \
+            | jq -r '
+              ( [ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) //
+              .workflow_runs[0].id // empty
+            ')
+
           if [ -n "$SUKI_RUN_ID" ]; then
-            SUKI_DL_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs/${SUKI_RUN_ID}/artifacts" | jq -r '[ .artifacts[] | select(.name | test("manager|apk|sukisu"; "i")) ] | first | .archive_download_url // empty')
+            SUKI_ARTIFACTS=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs/${SUKI_RUN_ID}/artifacts")
+
+            SUKI_DL_URL=$(echo "$SUKI_ARTIFACTS" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk|sukisu"; "i")) ] | first | .archive_download_url // empty
+            ')
+
             if [ -n "$SUKI_DL_URL" ]; then
-              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -o "sukisu_temp.zip" "$SUKI_DL_URL"
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "sukisu_temp.zip" \
+                "$SUKI_DL_URL" || true
+
               if [ -s "sukisu_temp.zip" ]; then
                 mkdir -p sukisu_extracted
-                unzip -q -o "sukisu_temp.zip" -d sukisu_extracted/
+                unzip -q -o "sukisu_temp.zip" -d sukisu_extracted/ || true
+
                 FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | grep -iE "arm64-v8a|arm64" | head -n 1)
                 [ -z "$FOUND_SUKI_APK" ] && FOUND_SUKI_APK=$(find sukisu_extracted -type f -name "*.apk" | head -n 1)
-                [ -n "$FOUND_SUKI_APK" ] && cp "$FOUND_SUKI_APK" "Action_SukiSU_$(basename "$FOUND_SUKI_APK")"
+
+                if [ -n "$FOUND_SUKI_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_SUKI_APK")
+                  TARGET_NAME="Action_SukiSU_${ORIGINAL_NAME}"
+                  cp "$FOUND_SUKI_APK" "$TARGET_NAME"
+                  echo "✅ Saved SukiSU Action APK (ARM64): $TARGET_NAME"
+                fi
                 rm -rf sukisu_temp.zip sukisu_extracted
               fi
             fi
           fi
 
-          # 4. Quét Action Artifact từ KOWX712/KernelSU (KowSU)
+          # ----------------------------------------------------
+          # 4. Lấy APK mới nhất từ KOWX712 Actions Artifacts
+          # ----------------------------------------------------
           echo "========================================"
-          echo "[*] Fetching latest artifact from KOWX712/KernelSU..."
-          KOWX_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=1" | jq -r '.workflow_runs[0].id // empty')
+          echo "[*] Fetching latest artifact from KOWX712/KernelSU actions..."
+
+          KOWX_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=1" \
+            | jq -r '.workflow_runs[0].id // empty')
+
           if [ -n "$KOWX_RUN_ID" ]; then
-            KOWX_DL_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/KOWX712/KernelSU/actions/runs/${KOWX_RUN_ID}/artifacts" | jq -r '[ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .archive_download_url // empty')
-            if [ -n "$KOWX_DL_URL" ]; then
-              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -o "kowx_temp.zip" "$KOWX_DL_URL"
+            ARTIFACTS_DATA=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/KOWX712/KernelSU/actions/runs/${KOWX_RUN_ID}/artifacts")
+
+            ARTIFACT_DOWNLOAD_URL=$(echo "$ARTIFACTS_DATA" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk"; "i")) ] | first | .archive_download_url // empty
+            ')
+
+            if [ -n "$ARTIFACT_DOWNLOAD_URL" ]; then
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "kowx_temp.zip" \
+                "$ARTIFACT_DOWNLOAD_URL" || true
+
               if [ -s "kowx_temp.zip" ]; then
                 mkdir -p kowx_extracted
-                unzip -q -o "kowx_temp.zip" -d kowx_extracted/
+                unzip -q -o "kowx_temp.zip" -d kowx_extracted/ || true
+                
                 FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | grep -i "arm64" | head -n 1)
                 [ -z "$FOUND_KOWX_APK" ] && FOUND_KOWX_APK=$(find kowx_extracted -type f -name "*.apk" | head -n 1)
-                [ -n "$FOUND_KOWX_APK" ] && cp "$FOUND_KOWX_APK" "KOWX_$(basename "$FOUND_KOWX_APK")"
+
+                if [ -n "$FOUND_KOWX_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_KOWX_APK")
+                  TARGET_NAME="KOWX_${ORIGINAL_NAME}"
+                  cp "$FOUND_KOWX_APK" "$TARGET_NAME"
+                  echo "✅ Saved KOWX APK: $TARGET_NAME"
+                fi
                 rm -rf kowx_temp.zip kowx_extracted
               fi
             fi
