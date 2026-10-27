@@ -32,7 +32,7 @@ esac
 
 KSU_PROVIDER="${4:-midori01/KernelSU}"
 
-# Rút gọn tên KSU Engine để đưa vào tên file zip
+# Rút gọn tên KSU Engine
 KSU_SHORT_NAME="KSU"
 case "${KSU_PROVIDER}" in
     "midori01/KernelSU"|"Midori-SU/KernelSU") KSU_SHORT_NAME="MidoriSU" ;;
@@ -77,6 +77,9 @@ echo "[*] Cleaning previous temporary outputs..."
 rm -rf out out_hyperos out_aosp anykernel anykernel_* EXTREME++*.zip
 find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -delete
 
+# Xóa header rác tránh lỗi devicetable-offsets khi chuyển target
+rm -rf include/config include/generated arch/arm64/include/generated
+
 sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Kbuild 2>/dev/null || true
 sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Makefile 2>/dev/null || true
 
@@ -119,45 +122,45 @@ fi
 # ------------------------------------------
 # 3. Dynamic KernelSU Provider Setup
 # ------------------------------------------
-SUSFS_VERSION="v2.3.0" # Giá trị mặc định ban đầu
+SUSFS_VERSION="v2.3.0"
 
 if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "[*] Injecting selected KernelSU: ${KSU_PROVIDER}..."
     case "${KSU_PROVIDER}" in
         "midori01/KernelSU"|"Midori-SU/KernelSU")
-            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         "ReSukiSU/ReSukiSU")
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+            curl -fLSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
             ;;
         "Baka-SU/BakaSU")
-            curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
             ;;
         "tiann/KernelSU")
-            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         "SukiSU-Ultra/SukiSU-Ultra")
-            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main || \
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main || \
+            curl -fLSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- main
             ;;
         "backslashxx/KernelSU")
-            curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s -- master
+            curl -fLSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -s -- master
             ;;
         "KernelSU-Next/KernelSU-Next")
-            curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s -- next
+            curl -fLSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s -- next
             ;;
         "KOWX712/KernelSU")
-            curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         "rsuntk/KernelSU")
-            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
         *)
-            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
+            curl -fLSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s -- main
             ;;
     esac
 
-    # --- TỰ ĐỘNG QUÉT PHIÊN BẢN SUSFS ---
+    # Tự động quét phiên bản SuSFS
     DETECTED_SUSFS=""
     if [ -f "include/linux/susfs.h" ]; then
         DETECTED_SUSFS=$(grep -m1 -E "SUSFS_VERSION[[:space:]]+\"v[0-9]" include/linux/susfs.h | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
@@ -319,6 +322,8 @@ build_target_os() {
         LLVM_IAS=1
         CC="ccache clang"
         HOSTCC="ccache clang"
+        HOSTCFLAGS="-w"
+        HOSTCXXFLAGS="-w"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
         KCFLAGS="-w"
@@ -329,8 +334,10 @@ build_target_os() {
     echo "🔨 Compiling for ${DEVICE_NAME} (Target: ${OS_UPPER})"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+    # Dọn dẹp sạch sẽ out_dir và các file auto-gen trong source tree tránh xung đột devicetable-offsets
     rm -rf "${OUT_DIR}"
     mkdir -p "${OUT_DIR}"
+    rm -rf include/config include/generated arch/arm64/include/generated
 
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" "${DEFCONFIG}"
 
@@ -490,7 +497,7 @@ build_target_os() {
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
 
-    echo "[*] Compiling DTBs & Images..."
+    echo "[*] Compiling DTBs & Images for ${OS_UPPER}..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
 
@@ -540,7 +547,6 @@ EOF
     local DATE_TAG="$(date +'%d%b%Y_%H%M')"
     local ZIP_NAME
     if [ "$ENABLE_KSU" -eq 1 ]; then
-        # Tên file zip chứa: Tên kernel + OS + Tên KSU Engine đã chọn + Chuỗi SUSFS + Bản SuSFS quét được + Ngày build
         ZIP_NAME="${ZIP_BASE}_${KSU_SHORT_NAME}_SUSFS_${SUSFS_VERSION}_${DATE_TAG}.zip"
     else
         ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
