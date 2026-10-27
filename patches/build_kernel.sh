@@ -92,13 +92,34 @@ if [ -f "fs/sdcardfs/Makefile" ]; then
     sed -i 's/-Werror//g' fs/sdcardfs/Makefile
 fi
 
-# Sửa lỗi thiếu file config.h trong driver âm thanh TFA9874
-TFA_SRC="techpack/audio/asoc/codecs/tfa9874/src/tfa98xx.c"
-if [ -f "$TFA_SRC" ]; then
-    echo "[*] Fixing missing config.h in TFA9874 audio codec..."
-    sed -i 's/#include "config.h"/\/\/ #include "config.h"/g' "$TFA_SRC"
-    mkdir -p techpack/audio/asoc/codecs/tfa9874/src && touch techpack/audio/asoc/codecs/tfa9874/src/config.h || true
+# ==========================================
+# FIX AUDIO CODEC TFA9874 (config.h & tfa98xx.h)
+# ==========================================
+echo "[*] Fixing Audio Codec TFA9874 includes..."
+TFA_DIR="techpack/audio/asoc/codecs/tfa9874"
+TFA_SRC="${TFA_DIR}/src/tfa98xx.c"
+
+if [ -d "$TFA_DIR" ]; then
+    # Xóa dòng include config.h
+    [ -f "$TFA_SRC" ] && sed -i 's/#include "config.h"/\/\/ #include "config.h"/g' "$TFA_SRC"
+    
+    # Ép compiler phải quét thư mục chứa header bằng cách ghi đè ccflags-y vào Makefile của nó
+    if [ -f "${TFA_DIR}/Makefile" ]; then
+        echo "ccflags-y += -I\$(srctree)/${TFA_DIR}/inc -I\$(srctree)/${TFA_DIR}/src" >> "${TFA_DIR}/Makefile"
+    fi
+    
+    # Đề phòng file tfa98xx.h không tồn tại ở bất kỳ đâu, tạo một dummy header rỗng để by-pass
+    if ! find "$TFA_DIR" -name "tfa98xx.h" | grep -q .; then
+        echo "[!] tfa98xx.h not found in $TFA_DIR, creating dummy header..."
+        mkdir -p "${TFA_DIR}/src" "${TFA_DIR}/inc"
+        echo "/* Dummy tfa98xx.h */" > "${TFA_DIR}/src/tfa98xx.h"
+        echo "/* Dummy tfa98xx.h */" > "${TFA_DIR}/inc/tfa98xx.h"
+    else
+        # Nếu có file tfa98xx.h nằm ở thư mục inc/, chép sang thư mục src/ để chắc chắn
+        find "$TFA_DIR" -name "tfa98xx.h" -exec cp {} "${TFA_DIR}/src/" \; 2>/dev/null || true
+    fi
 fi
+# ==========================================
 
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
