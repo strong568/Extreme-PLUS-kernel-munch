@@ -93,31 +93,39 @@ if [ -f "fs/sdcardfs/Makefile" ]; then
 fi
 
 # ==========================================
-# FIX AUDIO CODEC TFA9874 (config.h & tfa98xx.h)
+# FIX AUDIO CODEC TFA9874 (Missing Headers)
 # ==========================================
 echo "[*] Fixing Audio Codec TFA9874 includes..."
 TFA_DIR="techpack/audio/asoc/codecs/tfa9874"
-TFA_SRC="${TFA_DIR}/src/tfa98xx.c"
 
 if [ -d "$TFA_DIR" ]; then
-    # Xóa dòng include config.h
-    [ -f "$TFA_SRC" ] && sed -i 's/#include "config.h"/\/\/ #include "config.h"/g' "$TFA_SRC"
+    mkdir -p "${TFA_DIR}/src" "${TFA_DIR}/inc"
     
-    # Ép compiler phải quét thư mục chứa header bằng cách ghi đè ccflags-y vào Makefile của nó
+    # Ép compiler quét thư mục chứa header
     if [ -f "${TFA_DIR}/Makefile" ]; then
+        # Tránh ghi đè nhiều lần nếu script chạy lại
+        sed -i '/ccflags-y += -I\$(srctree)\/'"$TFA_DIR"'\/inc/d' "${TFA_DIR}/Makefile"
         echo "ccflags-y += -I\$(srctree)/${TFA_DIR}/inc -I\$(srctree)/${TFA_DIR}/src" >> "${TFA_DIR}/Makefile"
     fi
-    
-    # Đề phòng file tfa98xx.h không tồn tại ở bất kỳ đâu, tạo một dummy header rỗng để by-pass
-    if ! find "$TFA_DIR" -name "tfa98xx.h" | grep -q .; then
-        echo "[!] tfa98xx.h not found in $TFA_DIR, creating dummy header..."
-        mkdir -p "${TFA_DIR}/src" "${TFA_DIR}/inc"
-        echo "/* Dummy tfa98xx.h */" > "${TFA_DIR}/src/tfa98xx.h"
-        echo "/* Dummy tfa98xx.h */" > "${TFA_DIR}/inc/tfa98xx.h"
-    else
-        # Nếu có file tfa98xx.h nằm ở thư mục inc/, chép sang thư mục src/ để chắc chắn
-        find "$TFA_DIR" -name "tfa98xx.h" -exec cp {} "${TFA_DIR}/src/" \; 2>/dev/null || true
-    fi
+
+    # Tạo các file dummy header thường bị thiếu trong driver này
+    MISSING_HEADERS=(
+        "config.h"
+        "tfa98xx.h"
+        "tfa_device.h"
+        "tfa_ext.h"
+        "tfa_container.h"
+    )
+
+    for header in "${MISSING_HEADERS[@]}"; do
+        # Nếu file .c nào đó include header, ta comment nó lại để an toàn
+        find "$TFA_DIR" -name "*.c" -exec sed -i "s/#include \"$header\"/\/\/ #include \"$header\"/g" {} +
+        find "$TFA_DIR" -name "*.h" -exec sed -i "s/#include \"$header\"/\/\/ #include \"$header\"/g" {} +
+
+        # Đồng thời tạo file rỗng phòng hờ (nhỡ đâu có file gọi qua #include <>)
+        touch "${TFA_DIR}/src/$header"
+        touch "${TFA_DIR}/inc/$header"
+    done
 fi
 # ==========================================
 
