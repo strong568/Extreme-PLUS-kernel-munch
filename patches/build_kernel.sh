@@ -79,8 +79,8 @@ find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -dele
 
 rm -rf include/config include/generated arch/arm64/include/generated
 
-sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Kbuild 2>/dev/null || true
-sed -i 's/-Werror//g' drivers/staging/qcacld-3.0/Makefile 2>/dev/null || true
+# XÓA TRIỆT ĐỂ -Werror TRÊN TẤT CẢ DRIVER STAGING VÀ WI-FI
+find drivers/staging -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Werror//g' {} + 2>/dev/null || true
 
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
@@ -159,7 +159,6 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
             ;;
     esac
 
-    # Quét phiên bản SuSFS tự động
     DETECTED_SUSFS=""
     if [ -f "include/linux/susfs.h" ]; then
         DETECTED_SUSFS=$(grep -m1 -E "SUSFS_VERSION[[:space:]]+\"v[0-9]" include/linux/susfs.h | grep -oE "v[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
@@ -180,13 +179,11 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
         sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig 2>/dev/null || true
     fi
 
-    # 1. Bổ sung stub symbols chống lỗi undefined symbol khi link vmlinux
     python3 -c '
 import os, glob
 
 ksu_dir = "drivers/kernelsu"
 if os.path.isdir(ksu_dir):
-    # Tìm kiếm xem ksu_handle_sys_read hoặc ksu_is_init_rc_hook_enabled đã có chưa
     has_sys_read = False
     has_init_rc = False
     for root, _, files in os.walk(ksu_dir):
@@ -221,7 +218,6 @@ bool ksu_is_init_rc_hook_enabled = false;
         with open(stub_file, "w") as fp:
             fp.write("// Auto-generated compatibility stubs\n" + "\n".join(missing_stubs))
         
-        # Thêm vào Makefile của kernelsu
         mk_file = os.path.join(ksu_dir, "Makefile")
         if os.path.exists(mk_file):
             with open(mk_file, "r") as fp:
@@ -232,7 +228,6 @@ bool ksu_is_init_rc_hook_enabled = false;
         print("✅ Added missing KSU symbol stubs (ksu_handle_sys_read / ksu_is_init_rc_hook_enabled)")
 ' 2>/dev/null || true
 
-    # 2. Patch universal manager package verification
     python3 -c '
 import os
 candidates = [
@@ -378,7 +373,8 @@ build_target_os() {
         HOSTCXXFLAGS="-w"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
-        KCFLAGS="-w"
+        KCFLAGS="-w -Wno-error"
+        CFLAGS_KERNEL="-w"
     )
 
     echo ""
