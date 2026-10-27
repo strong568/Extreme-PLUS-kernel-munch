@@ -92,6 +92,14 @@ if [ -f "fs/sdcardfs/Makefile" ]; then
     sed -i 's/-Werror//g' fs/sdcardfs/Makefile
 fi
 
+# Sửa lỗi thiếu file config.h trong driver âm thanh TFA9874
+TFA_SRC="techpack/audio/asoc/codecs/tfa9874/src/tfa98xx.c"
+if [ -f "$TFA_SRC" ]; then
+    echo "[*] Fixing missing config.h in TFA9874 audio codec..."
+    sed -i 's/#include "config.h"/\/\/ #include "config.h"/g' "$TFA_SRC"
+    mkdir -p techpack/audio/asoc/codecs/tfa9874/src && touch techpack/audio/asoc/codecs/tfa9874/src/config.h || true
+fi
+
 sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
 grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
 CONFIG_CRYPTO_ZSTD=y
