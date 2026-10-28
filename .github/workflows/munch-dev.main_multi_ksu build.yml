@@ -26,11 +26,11 @@ on:
         description: 'Select KernelSU Source Variant'
         required: true
         type: choice
-        default: 'midori01/KernelSU'
+        default: 'Baka-SU/BakaSU'
         options:
+          - 'Baka-SU/BakaSU'
           - 'midori01/KernelSU'
           - 'ReSukiSU/ReSukiSU'
-          - 'Baka-SU/BakaSU'
           - 'rsuntk/KernelSU'
           - 'tiann/KernelSU'
           - 'SukiSU-Ultra/SukiSU-Ultra'
