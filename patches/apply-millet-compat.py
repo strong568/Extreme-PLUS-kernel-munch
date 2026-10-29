@@ -3,31 +3,14 @@
 # PROJECT EXTREME++ | Maintainer: PandeyJI-9
 # Device: POCO F4 (munch) | Target: HyperOS 4 / HyperOS 2 / MIUI Universal
 # Millet Dual-ABI & Multi-Protocol Netlink Compatibility Engine
-#
-# Architectural Resolution:
-#   1. Dual-ABI Netlink Frame Parser:
-#      Handles both 160-byte frames (struct millet_data from HyperOS 2 / HyperOS 4 /
-#      Android 14+ /system_ext/bin/millet_monitor) and 96-byte frames
-#      (struct millet_userconf from legacy MIUI / Android 12-13).
-#      Completely eliminates 'src_port 2 invalid! from 0 need len 160 len 96'.
-#   2. Dynamic Netlink Sender Port Resolution:
-#      Uses NETLINK_CB(skb).portid if nlmsg_pid == 0 to prevent dead unicast replies.
-#   3. HyperOS Handshake / Epoll Keep-Alive:
-#      Resolves 'failed to create socket for type 1' and eliminates the 9-second
-#      crash/restart cycle of millet_monitor. Activates proper background app
-#      freezing and eliminates standby battery drain.
-#   4. Multi-Unit Netlink Protocol Listening:
-#      Simultaneously binds protocols 29 (stock sm8250), 30 (legacy MIUI), and
-#      31 (modern HyperOS), dynamically routing to the active userspace daemon.
-#   5. AOSP Safe:
-#      Zero impact on AOSP builds where CONFIG_MILLET_* is completely compiled out.
 # ==============================================================================
 import sys
 import os
+import re
 
 kernel_src = sys.argv[1] if len(sys.argv) > 1 else "."
 
-# 1. Search for millet_core.c across common Xiaomi kernel source trees
+# 1. Tìm tệp millet_core.c
 candidates = [
     os.path.join(kernel_src, "drivers/mihw/millet/millet_core.c"),
     os.path.join(kernel_src, "drivers/millet/millet_core.c"),
@@ -41,7 +24,6 @@ for c in candidates:
         break
 
 if not target_file:
-    # Try searching recursively within drivers/
     drivers_dir = os.path.join(kernel_src, "drivers")
     if os.path.exists(drivers_dir):
         for root, dirs, files in os.walk(drivers_dir):
@@ -62,7 +44,25 @@ if "/* EXTREME_MILLET_UNIVERSAL_COMPAT_V1 */" in content:
     print("ℹ️ millet_core.c is already patched with Extreme++ Universal Compatibility Engine.")
     sys.exit(0)
 
-# 2. Locate recv_handler in millet_core.c
+# 2. Chèn khai báo toàn cục lên đầu tệp (ngay sau dòng #include cuối cùng)
+# Điều này đảm bảo millet_sendto_user() luôn nhìn thấy biến trước
+header_defs = """
+/* EXTREME_MILLET_UNIVERSAL_COMPAT_V1 */
+#ifndef EXTREME_MILLET_MAX_SOCKS
+#define EXTREME_MILLET_MAX_SOCKS 3
+#endif
+static struct sock *extreme_millet_socks[EXTREME_MILLET_MAX_SOCKS] = {NULL};
+static const int extreme_millet_protocols[EXTREME_MILLET_MAX_SOCKS] = { 29, 30, 31 };
+"""
+
+last_include = content.rfind("#include")
+if last_include != -1:
+    end_include_line = content.find("\n", last_include)
+    content = content[:end_include_line] + "\n" + header_defs + content[end_include_line:]
+else:
+    content = header_defs + "\n" + content
+
+# 3. Patch hàm recv_handler
 start_recv = content.find("static void recv_handler(struct sk_buff *skb)")
 end_recv = content.find("static int millet_sock_show", start_recv)
 
@@ -70,12 +70,7 @@ if start_recv == -1 or end_recv == -1:
     print("⚠️ Could not locate recv_handler boundary in millet_core.c - skipping patch.")
     sys.exit(1)
 
-new_recv_handler = """/* EXTREME_MILLET_UNIVERSAL_COMPAT_V1 */
-#define EXTREME_MILLET_MAX_SOCKS 3
-static struct sock *extreme_millet_socks[EXTREME_MILLET_MAX_SOCKS];
-static const int extreme_millet_protocols[EXTREME_MILLET_MAX_SOCKS] = { 29, 30, 31 };
-
-static void recv_handler(struct sk_buff *skb)
+new_recv_handler = """static void recv_handler(struct sk_buff *skb)
 {
 	struct nlmsghdr *nlh = NULL;
 	uid_t uid = 0;
@@ -159,11 +154,6 @@ static void recv_handler(struct sk_buff *skb)
 		return;
 	}
 
-	/*
-	 * In HyperOS, handshake probe messages might originate with non-standard
-	 * src_port or zero. We validate against MILLET_USER_ID, but allow valid
-	 * userspace daemon PIDs to establish registration.
-	 */
 	if (src_port != MILLET_USER_ID && src_port != 0 && src_port != (unsigned long)from) {
 		if (millet_debug)
 			pr_warn("millet: non-standard src_port 0x%lx from %d (len %u, is_hyperos=%d)\\n",
@@ -195,7 +185,6 @@ static void recv_handler(struct sk_buff *skb)
 	}
 
 	case MSG_TO_KERN: {
-		/* Always ensure the replying port is saved */
 		atomic_set(&millet_sk.mod[owner].port, from);
 
 		if (owner == HANDSHK_TYPE) {
@@ -216,7 +205,6 @@ static void recv_handler(struct sk_buff *skb)
 	}
 
 	default:
-		/* Unknown or vendor-custom message type: bind port to maintain connection */
 		atomic_set(&millet_sk.mod[owner].port, from);
 		if (millet_debug)
 			pr_info("millet: vendor msg_type %d for owner %d from %d\\n",
@@ -229,7 +217,7 @@ static void recv_handler(struct sk_buff *skb)
 
 content = content[:start_recv] + new_recv_handler + content[end_recv:]
 
-# 3. Patch millet_sendto_user to protect against dead ports (<= 0) and fallback across protocols
+# 4. Patch millet_sendto_user kiểm tra dead port
 target_sendto = "monitor_port = atomic_read(&sk->mod[monitor].port);"
 replace_sendto = """monitor_port = atomic_read(&sk->mod[monitor].port);
 	if (monitor_port <= 0) {
@@ -240,7 +228,7 @@ replace_sendto = """monitor_port = atomic_read(&sk->mod[monitor].port);
 if target_sendto in content and "if (monitor_port <= 0)" not in content:
     content = content.replace(target_sendto, replace_sendto, 1)
 
-# Also enhance unicast with fallback across all registered netlink protocols
+# Patch retry qua nhiều socket Netlink (chuẩn C90: đặt khai báo lên đầu block)
 old_unicast_block = """	ret = nlmsg_unicast(sk->sock, skb, monitor_port);
 
 	if (ret < 0) {
@@ -279,7 +267,7 @@ new_unicast_block = """	ret = nlmsg_unicast(sk->sock, skb, monitor_port);
 if old_unicast_block in content:
     content = content.replace(old_unicast_block, new_unicast_block, 1)
 
-# 4. Patch millet_init to bind Netlink protocols 29, 30, and 31 simultaneously
+# 5. Patch millet_init để bind đồng thời các giao thức Netlink 29, 30, 31
 old_init_block = """	pr_err("enter millet_init func!\\n");
 	millet_sk.sock =
 		netlink_kernel_create(&init_net, NETLINK_MILLET, &cfg);
@@ -313,24 +301,13 @@ new_init_block = """	int i, bound_socks = 0;
 
 if old_init_block in content:
     content = content.replace(old_init_block, new_init_block, 1)
-else:
-    # Try finding netlink_kernel_create call with NETLINK_MILLET
-    marker = "netlink_kernel_create(&init_net, NETLINK_MILLET, &cfg);"
-    if marker in content:
-        content = content.replace(
-            marker,
-            "netlink_kernel_create(&init_net, NETLINK_MILLET, &cfg);\\n\\t/* Multi-protocol fallback handled */",
-            1
-        )
 
 with open(target_file, "w") as f:
     f.write(content)
 
 print(f"✅ Successfully patched {os.path.basename(target_file)} with Universal Dual-ABI & Multi-Netlink support!")
 
-# 5. Also patch uapi/millet.h to define NETLINK_MILLET_LEGACY and NETLINK_MILLET_HYPEROS
-import re
-
+# 6. Cập nhật uapi/millet.h
 uapi_candidates = [
     os.path.join(os.path.dirname(target_file), "uapi/millet.h"),
     os.path.join(kernel_src, "include/uapi/linux/millet.h"),
@@ -357,3 +334,4 @@ for uc in uapi_candidates:
                     uf.write(ucontent)
                 print(f"✅ Updated {os.path.basename(uc)} with HyperOS Netlink protocol definitions.")
                 break
+				
