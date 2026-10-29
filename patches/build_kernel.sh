@@ -291,6 +291,11 @@ if [ -f "apply-vmscan-critical.py" ]; then
     python3 apply-vmscan-critical.py mm/vmscan.c || echo "⚠️ vmscan patch skipped"
 fi
 
+if [ -f "apply-millet-compat.py" ]; then
+    echo "[*] Applying Xiaomi HyperOS 4 / MIUI Universal Millet Dual-ABI Compatibility Patch..."
+    python3 apply-millet-compat.py . || echo "⚠️ Millet patch skipped"
+fi
+
 if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
     sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 0;/' kernel/sched/cpufreq_schedutil.c
     echo "[+] Schedutil up_rate_limit_us set to 0 in kernel/sched/cpufreq_schedutil.c for lightning boot"
@@ -607,7 +612,9 @@ echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
 # EXTREME+ Governor Enforcement
 for p in /sys/devices/system/cpu/cpufreq/policy*; do
     if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
-        echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
+        if [ "$(cat $p/scaling_governor 2>/dev/null)" != "extreme+" ]; then
+            echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
+        fi
     fi
     for gov in extreme+ schedutil; do
         if [ -d "$p/$gov" ]; then
@@ -770,7 +777,9 @@ echo 55 > /proc/sys/kernel/sched_group_downmigrate 2>/dev/null || true
 # EXTREME+ Governor Enforcement
 for p in /sys/devices/system/cpu/cpufreq/policy*; do
     if [ -f "$p/scaling_available_governors" ] && grep -q "extreme+" "$p/scaling_available_governors"; then
-        echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
+        if [ "$(cat $p/scaling_governor 2>/dev/null)" != "extreme+" ]; then
+            echo "extreme+" > "$p/scaling_governor" 2>/dev/null || true
+        fi
     fi
     for gov in extreme+ schedutil; do
         if [ -d "$p/$gov" ]; then
