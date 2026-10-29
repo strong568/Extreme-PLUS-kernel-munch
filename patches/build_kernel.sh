@@ -162,7 +162,7 @@ if apk_sign_path:
         content = f.read()
 
     hook_target = "return check_v2_signature(path, signature_index);"
-    hook_replacement = """// Bulletproof Fallback: check known manager package names
+    hook_replacement = r"""// Bulletproof Fallback: check known manager package names
     if (check_v2_signature(path, signature_index))
         return true;
     char pkg_buf[128];
@@ -192,7 +192,6 @@ if apk_sign_path:
     else:
         print("ℹ️ " + apk_sign_path + " already patched or target signature pattern handled")
 ' 2>/dev/null || true
-
 
     echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
