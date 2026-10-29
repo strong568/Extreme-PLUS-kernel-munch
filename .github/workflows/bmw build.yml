@@ -28,6 +28,7 @@ on:
         type: choice
         default: 'midori01/KernelSU'
         options:
+          - 'LyraVoid/FinaSU'
           - 'midori01/KernelSU'
           - 'ReSukiSU/ReSukiSU'
           - 'Baka-SU/BakaSU'
@@ -96,11 +97,10 @@ jobs:
           if [ "${{ inputs.build_ksu }}" = "true" ]; then
             KSU_MODE="ksu"
           fi
-          # Thêm biến ksu_provider làm đối số thứ 4
-          ./build_kernel.sh munch "$KSU_MODE" "${{ inputs.target_os }}" "${{ inputs.ksu_provider }}"
+          # Truyền đầy đủ đối số 4 (ksu_provider) và đối số 5 (ksu_version)
+          ./build_kernel.sh munch "$KSU_MODE" "${{ inputs.target_os }}" "${{ inputs.ksu_provider }}" "${{ inputs.ksu_version }}"
           echo "✅ Built ZIP files:"
           ls -lh EXTREME++*.zip
-
 
       - name: "🔍 Scan SuSFS Version & Rename Kernel ZIPs"
         if: success()
@@ -170,6 +170,7 @@ jobs:
         run: |
           mkdir -p apk_output
           REPOS=(
+            "LyraVoid/FinaSU"
             "rsuntk/KernelSU"
             "tiann/KernelSU"
             "Baka-SU/BakaSU"
@@ -207,7 +208,9 @@ jobs:
             VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
 
             if [ -n "$APK_URL" ]; then
-              if [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+              if [[ "$repo" == "LyraVoid/FinaSU" ]]; then
+                FILE_NAME="Release_FinaSU_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
                 FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
               elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
@@ -220,14 +223,14 @@ jobs:
             fi
           done
 
-          # Hàm fetch action apk (được cải tiến để hiển thị rõ quá trình đưa ra APK)
+          # Fetch Action APK helper
           fetch_action_apk() {
             local R_ID="$1"; local REPO_API="$2"; local PREFIX="$3"
             [ -z "$R_ID" ] && return 0
             echo "[*] Fetching artifact for $PREFIX (Run ID: $R_ID) from $REPO_API..."
             local ART_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO_API}/actions/runs/${R_ID}/artifacts")
             
-            echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk|sukisu|ksu"; "i"))' | while read -r art; do
+            echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk|sukisu|ksu|finasu"; "i"))' | while read -r art; do
               local ART_NAME=$(echo "$art" | jq -r '.name')
               local ART_URL=$(echo "$art" | jq -r '.archive_download_url')
               
@@ -237,7 +240,6 @@ jobs:
                 mkdir -p ext_art
                 unzip -q -o "temp_art.zip" -d ext_art/
                 
-                # Ưu tiên ARM64
                 local CHOSEN_APK=$(find ext_art -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
                 [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find ext_art -type f -name "*.apk" | grep -i "arm64" | head -n 1)
                 [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find ext_art -type f -name "*.apk" | head -n 1)
@@ -246,15 +248,13 @@ jobs:
                   local FINAL_FILE="apk_output/${PREFIX}_$(basename "$CHOSEN_APK")"
                   cp "$CHOSEN_APK" "$FINAL_FILE"
                   echo "  ✅ Đưa ra APK thành công: $FINAL_FILE"
-                else
-                  echo "  ⚠️ Không tìm thấy file APK bên trong Artifact này!"
                 fi
                 rm -rf temp_art.zip ext_art
               fi
             done
           }
 
-          # 2. Lấy BakaSU Actions (Main, PR, ReSukiSU)
+          # 2. Lấy BakaSU Actions
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU..."
           BAKA_RUNS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
@@ -272,7 +272,7 @@ jobs:
           SUKI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '( [ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) // .workflow_runs[0].id // empty')
           fetch_action_apk "$SUKI_RUN_ID" "SukiSU-Ultra/SukiSU-Ultra" "Action_SukiSU"
 
-          # 4. Lấy KOWX712 Actions (Được tinh chỉnh để ưu tiên tìm Manager build)
+          # 4. Lấy KOWX712 Actions
           echo "========================================"
           KOWX_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=10" | jq -r '( [ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) // .workflow_runs[0].id // empty')
           fetch_action_apk "$KOWX_RUN_ID" "KOWX712/KernelSU" "Action_KOWX712"
@@ -281,6 +281,12 @@ jobs:
           echo "========================================"
           MIDORI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/midori01/KernelSU/actions/runs?status=completed&conclusion=success&per_page=10" | jq -r '( [ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) // .workflow_runs[0].id // empty')
           fetch_action_apk "$MIDORI_RUN_ID" "midori01/KernelSU" "Action_midori01"
+
+          # 6. Lấy FinaSU Actions
+          echo "========================================"
+          FINASU_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/LyraVoid/FinaSU/actions/runs?status=completed&conclusion=success&per_page=10" | jq -r '( [ .workflow_runs[] | select(.name | test("build|manager|ci"; "i")) | .id ] | first ) // .workflow_runs[0].id // empty')
+          fetch_action_apk "$FINASU_RUN_ID" "LyraVoid/FinaSU" "Action_FinaSU"
+
 
       - name: "📦 Upload Build Artifacts (Backup)"
         if: success()
