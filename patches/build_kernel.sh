@@ -172,6 +172,9 @@ if apk_sign_path:
             !strcmp(pkg_buf, "org.bakasu.bakasu") ||
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
+            !strcmp(pkg_buf, "me.yuki.finasu") ||
+            !strcmp(pkg_buf, "io.github.lyravoid.finasu") ||
+            !strcmp(pkg_buf, "org.finasu") ||
             !strcmp(pkg_buf, "com.resukisu")) {
             pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
             *signature_index = 0;
@@ -187,6 +190,7 @@ if apk_sign_path:
     else:
         print("ℹ️ " + apk_sign_path + " already patched or target signature pattern handled")
 ' 2>/dev/null || true
+
 
     echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
