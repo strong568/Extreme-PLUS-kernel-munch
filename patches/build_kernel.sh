@@ -1005,16 +1005,28 @@ EOF
     local DATE_TAG="$(date +'%d%b%Y_%H%M')"
     local ZIP_NAME
     if [ "$ENABLE_KSU" -eq 1 ]; then
-        # Lấy tên repo phía sau dấu "/" (ví dụ: LyraVoid/FinaSU -> FinaSU)
-        local KSU_TAG="${KSU_PROVIDER##*/}"
-        # Dự phòng nếu KSU_TAG trống
-        [ -z "$KSU_TAG" ] && KSU_TAG="KSU"
-        
+        local KSU_TAG=""
+        case "${KSU_PROVIDER}" in
+            *LyraVoid/FinaSU*|*FinaSU*)         KSU_TAG="FinaSU" ;;
+            *midori01/KernelSU*|*MidoriSU*)     KSU_TAG="MidoriSU" ;;
+            *ReSukiSU*)                         KSU_TAG="ReSukiSU" ;;
+            *Baka-SU*|*BakaSU*)                 KSU_TAG="BakaSU" ;;
+            *SukiSU-Ultra*)                     KSU_TAG="SukiSU_Ultra" ;;
+            *KernelSU-Next*)                    KSU_TAG="KSU_Next" ;;
+            *KOWX712/KernelSU*)                 KSU_TAG="KowSU" ;;
+            *backslashxx/KernelSU*)             KSU_TAG="backslashxx_KSU" ;;
+            *rsuntk/KernelSU*)                  KSU_TAG="rsuntk_KSU" ;;
+            *tiann/KernelSU*)                   KSU_TAG="Official_KSU" ;;
+            *) 
+                # Repo tuỳ chỉnh khác: thay "/" bằng "_"
+                KSU_TAG=$(echo "${KSU_PROVIDER}" | tr '/' '_' | tr '-' '_')
+                ;;
+        esac
+
         ZIP_NAME="${ZIP_BASE}_${KSU_TAG}_${DATE_TAG}.zip"
     else
         ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
     fi
-
 
     (
         cd "${AK_DIR}"
