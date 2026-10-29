@@ -172,15 +172,17 @@ if apk_sign_path:
             !strcmp(pkg_buf, "org.bakasu.bakasu") ||
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
+            !strcmp(pkg_buf, "com.midori.supermanager") ||
             !strcmp(pkg_buf, "me.yuki.finasu") ||
             !strcmp(pkg_buf, "io.github.lyravoid.finasu") ||
             !strcmp(pkg_buf, "org.finasu") ||
             !strcmp(pkg_buf, "com.resukisu")) {
-            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
+            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\n", pkg_buf);
             *signature_index = 0;
             return true;
         }
     }
+
     return false;"""
     if hook_target in content and "pkg_buf" not in content:
         content = content.replace(hook_target, hook_replacement)
