@@ -29,6 +29,7 @@ jobs:
             "backslashxx/KernelSU"
             "KernelSU-Next/KernelSU-Next"
             "midori01/KernelSU"
+            "LyraVoid/FinaSU"
           )
 
           COUNT=0
@@ -112,6 +113,8 @@ jobs:
                 FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
               elif [[ "$repo" == "midori01/KernelSU" ]]; then
                 FILE_NAME="Release_midori01_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "LyraVoid/FinaSU" ]]; then
+                FILE_NAME="Release_FinaSU_${RAW_FILE_NAME}"
               else
                 FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
               fi
@@ -131,9 +134,6 @@ jobs:
 
           # ----------------------------------------------------
           # 2. Lấy 3 kết quả APK Action từ Baka-SU/BakaSU (Chỉ ARM64):
-          #    - BakaSU (Main/Master)
-          #    - BakaSU-PR (Pull Request)
-          #    - ReSukiSU (Branch / Workflow ReSukiSU)
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU..."
@@ -169,7 +169,6 @@ jobs:
             ) ] | first | .id // empty
           ')
 
-          # Fallback cho Main nếu không khớp cụ thể branch
           if [ -z "$BAKASU_MAIN_RUN_ID" ]; then
             BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
               [ .workflow_runs[] | select(
@@ -207,10 +206,8 @@ jobs:
                 mkdir -p "ext_${PREFIX}_${ART_NAME}"
                 unzip -q -o "temp_${PREFIX}_${ART_NAME}.zip" -d "ext_${PREFIX}_${ART_NAME}/"
 
-                # CHỈ LỌC DUY NHẤT ARM64 (ưu tiên arm64-v8a, loại bỏ debug/v7a/riscv/x86/universal)
                 local CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
                 
-                # Fallback nếu không có đuôi -release
                 if [ -z "$CHOSEN_APK" ]; then
                   CHOSEN_APK=$(find "ext_${PREFIX}_${ART_NAME}" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
                 fi
@@ -410,7 +407,66 @@ jobs:
           fi
 
           # ----------------------------------------------------
-          # 6. Tổng kết số lượng APK
+          # 6. Lấy APK mới nhất từ LyraVoid/FinaSU Actions Artifacts (Chỉ ARM64)
+          # ----------------------------------------------------
+          echo "========================================"
+          echo "[*] Fetching latest artifact from LyraVoid/FinaSU actions..."
+
+          FINA_RUN_ID=$(curl -sL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/LyraVoid/FinaSU/actions/runs?status=completed&conclusion=success&per_page=10" \
+            | jq -r '
+              ( [ .workflow_runs[] | select(.name | test("build|manager|ci|apk"; "i")) | .id ] | first ) //
+              .workflow_runs[0].id // empty
+            ')
+
+          if [ -n "$FINA_RUN_ID" ]; then
+            echo "[*] Target LyraVoid/FinaSU Run ID: $FINA_RUN_ID"
+
+            FINA_ARTIFACTS=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/LyraVoid/FinaSU/actions/runs/${FINA_RUN_ID}/artifacts")
+
+            FINA_DL_URL=$(echo "$FINA_ARTIFACTS" | jq -r '
+              [ .artifacts[] | select(.name | test("manager|apk|finasu"; "i")) ] | first | .archive_download_url // empty
+            ')
+
+            if [ -n "$FINA_DL_URL" ]; then
+              echo "[*] Downloading FinaSU artifact..."
+              curl -fLSs \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -o "finasu_temp.zip" \
+                "$FINA_DL_URL"
+
+              if [ -s "finasu_temp.zip" ]; then
+                mkdir -p finasu_extracted
+                unzip -q -o "finasu_temp.zip" -d finasu_extracted/
+
+                FOUND_FINA_APK=$(find finasu_extracted -type f -name "*.apk" | grep -iE "arm64-v8a|arm64" | head -n 1)
+                [ -z "$FOUND_FINA_APK" ] && FOUND_FINA_APK=$(find finasu_extracted -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_FINA_APK" ]; then
+                  ORIGINAL_NAME=$(basename "$FOUND_FINA_APK")
+                  TARGET_NAME="Action_FinaSU_${ORIGINAL_NAME}"
+                  cp "$FOUND_FINA_APK" "apk_output/$TARGET_NAME"
+                  echo "✅ Saved FinaSU Action APK (ARM64): apk_output/$TARGET_NAME"
+                else
+                  echo "⚠️ No APK file found inside FinaSU artifact zip"
+                fi
+                rm -rf finasu_temp.zip finasu_extracted
+              fi
+            else
+              echo "⚠️ No matching manager/apk artifact in Run ID $FINA_RUN_ID"
+            fi
+          else
+            echo "⚠️ Could not retrieve any valid workflow runs for LyraVoid/FinaSU"
+          fi
+
+          # ----------------------------------------------------
+          # 7. Tổng kết số lượng APK
           # ----------------------------------------------------
           echo "========================================"
           COUNT=$(find apk_output -type f -name "*.apk" | wc -l)
@@ -449,6 +505,7 @@ jobs:
             - **Next:** `KernelSU-Next/KernelSU-Next`
             - **KOWX712:** `KOWX712/KernelSU` (Action Artifact mới nhất)
             - **Midori01 (Release & CI ARM64):** `midori01/KernelSU`
+            - **FinaSU (Release & CI ARM64):** `LyraVoid/FinaSU`
           files: apk_output/*.apk
           draft: false
           prerelease: false
