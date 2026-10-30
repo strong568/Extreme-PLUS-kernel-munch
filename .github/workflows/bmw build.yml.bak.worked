@@ -1,0 +1,229 @@
+name: "🚀 Build bmw EXTREME++ Kernel (BMW Edition - Dynamic Profiles)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Config/Patches Repo Branch'
+        required: true
+        type: string
+        default: 'bmw_ResukiSU'
+      build_ksu:
+        description: 'Integrate KowSU (KOWX712 Multi-Manager & SuSFS)'
+        required: true
+        type: boolean
+        default: true
+      target_os:
+        description: 'Target OS: both | hyperos | aosp'
+        required: true
+        type: choice
+        default: 'both'
+        options:
+          - 'both'
+          - 'hyperos'
+          - 'aosp'
+
+jobs:
+  build:
+    name: "Compile → Release"
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    timeout-minutes: 180 
+
+    steps:
+      - name: "📦 Checkout config repo"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: "🛠️ Install build dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip unzip zlib1g-dev python3 python3-pip jq
+
+      - name: "⚡ Setup ZyC-Clang 16"
+        run: |
+          mkdir -p $HOME/zyc-clang
+          curl -L "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260807-release/Clang-16.0.6-20260807.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C $HOME/zyc-clang
+          rm clang.tar.gz
+
+      - name: "🌐 Clone kernel source"
+        run: |
+          git clone --depth=1 -b android17-aptusitu https://github.com/AstideLabs/android_kernel_xiaomi_sm8250 kernel
+
+      - name: "⚙️ Inject PandeyJI Custom Build Script"
+        run: |
+          cp patches/* kernel/
+          chmod +x kernel/build_kernel.sh
+
+      # 🔥 FIX 2: THE MASTER ZRAM/SWAP HACK (Fixed for GitHub OverlayFS)
+      - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
+        run: |
+          echo "[*] Checking current RAM..."
+          free -h
+          echo "[*] Injecting 10GB Virtual RAM (Swap) on SSD..."
+          sudo fallocate -l 10G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          echo "[*] New RAM Capacity:"
+          free -h
+
+      - name: "🔨 Compile EXTREME++ Kernel"
+        run: |
+          cd kernel
+          KSU_MODE="noroot"
+          if [ "${{ inputs.build_ksu }}" = "true" ]; then
+            KSU_MODE="ksu"
+          fi
+          ./build_kernel.sh munch "$KSU_MODE" "${{ inputs.target_os }}"
+          
+          echo "✅ Built ZIP files:"
+          ls -lh EXTREME++*.zip
+
+      - name: "📦 Package Raw Kernel Images for HyperOS 4 (.img / dtb)"
+        if: success()
+        run: |
+          echo "[*] Checking for HyperOS raw images (.img / dtb) for HyperOS 4 developer testing..."
+          IMG_DIR="$GITHUB_WORKSPACE/raw_kernel_images_staging"
+          OUT_ZIP_DIR="$GITHUB_WORKSPACE/raw_images"
+          mkdir -p "$IMG_DIR" "$OUT_ZIP_DIR"
+
+          HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out_hyperos/arch/arm64/boot"
+          if [ ! -d "$HYPEROS_BOOT" ]; then
+            HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot"
+          fi
+
+          if [ -d "$HYPEROS_BOOT" ] && [ -f "$HYPEROS_BOOT/Image" ]; then
+            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/Image"
+            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/kernel.img"
+            echo "  [+] Included Image & kernel.img from $HYPEROS_BOOT/Image ($(du -h "$IMG_DIR/Image" | cut -f1))"
+
+            if [ -f "$HYPEROS_BOOT/dtbo.img" ]; then
+              cp -f "$HYPEROS_BOOT/dtbo.img" "$IMG_DIR/dtbo.img"
+              echo "  [+] Included dtbo.img from $HYPEROS_BOOT/dtbo.img"
+            fi
+
+            if [ -f "$HYPEROS_BOOT/dtb" ]; then
+              cp -f "$HYPEROS_BOOT/dtb" "$IMG_DIR/dtb"
+              cp -f "$HYPEROS_BOOT/dtb" "$IMG_DIR/dtb.img"
+              echo "  [+] Included dtb & dtb.img from $HYPEROS_BOOT/dtb"
+            elif [ -f "$HYPEROS_BOOT/dtb.img" ]; then
+              cp -f "$HYPEROS_BOOT/dtb.img" "$IMG_DIR/dtb.img"
+              cp -f "$HYPEROS_BOOT/dtb.img" "$IMG_DIR/dtb"
+              echo "  [+] Included dtb.img from $HYPEROS_BOOT/dtb.img"
+            fi
+
+            find "$HYPEROS_BOOT" -maxdepth 1 -name "*.img" -exec cp -f {} "$IMG_DIR/" \; 2>/dev/null || true
+
+            RAW_ZIP_NAME="EXTREME++_HyperOS4_Raw_Images_Build_${{ github.run_number }}.zip"
+            (
+              cd "$IMG_DIR"
+              zip -9 -r "$OUT_ZIP_DIR/$RAW_ZIP_NAME" ./*
+            )
+            rm -rf "$IMG_DIR"
+
+            echo "✅ Created HyperOS 4 Raw Images ZIP: $OUT_ZIP_DIR/$RAW_ZIP_NAME ($(du -h "$OUT_ZIP_DIR/$RAW_ZIP_NAME" | cut -f1))"
+            echo "RAW_IMAGES_ZIP_PATH=$OUT_ZIP_DIR/$RAW_ZIP_NAME" >> $GITHUB_ENV
+            echo "RAW_IMAGES_ZIP_NAME=$RAW_ZIP_NAME" >> $GITHUB_ENV
+          else
+            echo "ℹ️ HyperOS output not found (e.g. chỉ chọn build AOSP). Bỏ qua Raw Images ZIP."
+          fi
+
+      - name: "📱 Fetch KSU Managers (Artifacts & Releases)"
+        if: success() && inputs.build_ksu == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/managers"
+          cd "$GITHUB_WORKSPACE/managers"
+
+          # 1. Hàm tải từ GitHub Actions Artifact (dành cho KowSU / KOWX712)
+          download_action_artifact() {
+            local repo="$1"
+            local prefix="$2"
+            echo "[*] Fetching artifact from GitHub Action of $repo..."
+            
+            # Lấy run_id thành công mới nhất
+            local run_id=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$repo/actions/runs?status=success&per_page=1" | jq -r '.workflow_runs[0].id')
+
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+              # Lấy download url của artifact đầu tiên
+              local artifact_url=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$repo/actions/runs/$run_id/artifacts" | jq -r '.artifacts[0].archive_download_url')
+              
+              if [ -n "$artifact_url" ] && [ "$artifact_url" != "null" ]; then
+                echo "  [+] Downloading KowSU artifact ZIP from run #$run_id..."
+                curl -sL -H "Authorization: Bearer $GH_TOKEN" "$artifact_url" -o kowsu_artifact.zip
+                unzip -q -o kowsu_artifact.zip -d extracted_kowsu || true
+                find extracted_kowsu -name "*.apk" -exec mv {} ./${prefix}_kowsu.apk \;
+                rm -rf kowsu_artifact.zip extracted_kowsu
+                echo "  [+] Successfully fetched $prefix Manager from Action artifact"
+              fi
+            else
+              echo "  [!] Không thể lấy run artifact từ $repo"
+            fi
+          }
+
+          # 2. Hàm tải từ Release
+          download_release_apk() {
+            local repo="$1"
+            local prefix="$2"
+            echo "[*] Fetching latest APK from $repo Release..."
+            local url=$(curl -s "https://api.github.com/repos/$repo/releases/latest" | jq -r '.assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              url=$(curl -s "https://api.github.com/repos/$repo/releases" | jq -r '.[0].assets[] | select(.name | endswith(".apk")) | .browser_download_url' | head -n 1)
+            fi
+            if [ -n "$url" ] && [ "$url" != "null" ]; then
+              echo "  [+] Downloading $prefix from $url..."
+              curl -sL "$url" -o "${prefix}_$(basename "$url")"
+            fi
+          }
+
+          # --- Tải KowSU từ GitHub Action Artifacts ---
+          download_action_artifact "KOWX712/KernelSU" "KowSU"
+
+          # --- Tải các Manager khác qua Release ---
+          download_release_apk "Baka-SU/BakaSU" "BakaSU"
+          download_release_apk "ShirkNeko/SukiSU-Ultra" "SukiSU_Ultra"
+
+          echo "✅ Danh sách APK quản lý đã sẵn sàng:"
+          ls -lh
+
+      - name: "📦 Upload Build Artifacts (CI Artifacts)"
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: EXTREME++_BMW_Edition_BETA_${{ github.run_number }}
+          path: |
+            kernel/EXTREME++*.zip
+            raw_images/*.zip
+            managers/*.apk
+          if-no-files-found: warn
+
+      - name: "🚀 Publish to GitHub Releases"
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ github.run_number }}"
+          name: "EXTREME++ BMW Edition - Build #${{ github.run_number }}"
+          body: |
+            ### 🚀 EXTREME++ BMW Edition (POCO F4 - munch)
+            * **Build Number:** #${{ github.run_number }}
+            * **Config/Patches Branch:** ${{ inputs.branch }}
+            * **Kernel Branch:** android17-aptusitu
+            * **Target OS:** ${{ inputs.target_os }}
+            * **KSU Included:** ${{ inputs.build_ksu }}
+            * **Toolchain:** ZyC-Clang 16.0.6 + LLD
+          files: |
+            kernel/EXTREME++*.zip
+            raw_images/*.zip
+            managers/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

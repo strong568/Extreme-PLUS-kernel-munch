@@ -8,11 +8,16 @@ on:
         required: true
         type: string
         default: 'bmw_ResukiSU'
-      build_ksu:
-        description: 'Integrate KowSU (KOWX712 Multi-Manager & SuSFS)'
+      root_mode:
+        description: 'Root Variant (ksu_susfs | ksu_no_susfs | noroot | all)'
         required: true
-        type: boolean
-        default: true
+        type: choice
+        default: 'ksu_susfs'
+        options:
+          - 'ksu_susfs'
+          - 'ksu_no_susfs'
+          - 'noroot'
+          - 'all'
       target_os:
         description: 'Target OS: both | hyperos | aosp'
         required: true
@@ -75,11 +80,7 @@ jobs:
       - name: "🔨 Compile EXTREME++ Kernel"
         run: |
           cd kernel
-          KSU_MODE="noroot"
-          if [ "${{ inputs.build_ksu }}" = "true" ]; then
-            KSU_MODE="ksu"
-          fi
-          ./build_kernel.sh munch "$KSU_MODE" "${{ inputs.target_os }}"
+          ./build_kernel.sh munch "${{ inputs.root_mode }}" "${{ inputs.target_os }}"
           
           echo "✅ Built ZIP files:"
           ls -lh EXTREME++*.zip
@@ -134,7 +135,7 @@ jobs:
           fi
 
       - name: "📱 Fetch KSU Managers (Artifacts & Releases)"
-        if: success() && inputs.build_ksu == true
+        if: success() && inputs.root_mode != 'noroot'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -147,12 +148,10 @@ jobs:
             local prefix="$2"
             echo "[*] Fetching artifact from GitHub Action of $repo..."
             
-            # Lấy run_id thành công mới nhất
             local run_id=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
               "https://api.github.com/repos/$repo/actions/runs?status=success&per_page=1" | jq -r '.workflow_runs[0].id')
 
             if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
-              # Lấy download url của artifact đầu tiên
               local artifact_url=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
                 "https://api.github.com/repos/$repo/actions/runs/$run_id/artifacts" | jq -r '.artifacts[0].archive_download_url')
               
@@ -184,10 +183,7 @@ jobs:
             fi
           }
 
-          # --- Tải KowSU từ GitHub Action Artifacts ---
           download_action_artifact "KOWX712/KernelSU" "KowSU"
-
-          # --- Tải các Manager khác qua Release ---
           download_release_apk "Baka-SU/BakaSU" "BakaSU"
           download_release_apk "ShirkNeko/SukiSU-Ultra" "SukiSU_Ultra"
 
@@ -217,7 +213,7 @@ jobs:
             * **Config/Patches Branch:** ${{ inputs.branch }}
             * **Kernel Branch:** android17-aptusitu
             * **Target OS:** ${{ inputs.target_os }}
-            * **KSU Included:** ${{ inputs.build_ksu }}
+            * **Root Mode:** ${{ inputs.root_mode }}
             * **Toolchain:** ZyC-Clang 16.0.6 + LLD
           files: |
             kernel/EXTREME++*.zip
