@@ -120,6 +120,12 @@ setup_ksu_sources() {
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
 
+        # Bỏ qua kiểm tra Tracepoint Hook trên Non-GKI trong Kbuild
+        if [ -f "drivers/kernelsu/Kbuild" ]; then
+            sed -i '/TP hooks are incompatible with Non-GKI/d' drivers/kernelsu/Kbuild || true
+            sed -i '/TP hooks are only supported on GKI 2.0 kernels/d' drivers/kernelsu/Kbuild || true
+        fi
+
         python3 -c '
 import os
 
@@ -276,6 +282,8 @@ build_target_os() {
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
+        KCFLAGS="-Wno-error"
+        KCPPFLAGS="-Wno-error"
     )
 
     echo ""
@@ -336,7 +344,7 @@ build_target_os() {
                 -e KSU \
                 -e KSU_SUSFS \
                 -d KSU_TRACEPOINT_HOOK \
-                -d KSU_MANUAL_HOOK \
+                -e KSU_MANUAL_HOOK \
                 -e KSU_MULTI_MANAGER_SUPPORT \
                 -e THREAD_INFO_IN_TASK \
                 -e KSU_SUSFS_SUS_PATH \
@@ -356,7 +364,7 @@ build_target_os() {
                 -e KSU \
                 -d KSU_SUSFS \
                 -d KSU_TRACEPOINT_HOOK \
-                -d KSU_MANUAL_HOOK \
+                -e KSU_MANUAL_HOOK \
                 -e KSU_MULTI_MANAGER_SUPPORT \
                 -d KSU_DISABLE_MANAGER \
                 -d KSU_DISABLE_POLICY
