@@ -10,27 +10,30 @@ trap 'echo "❌ [ERROR] Script failed on line $LINENO"; exit 1' ERR
 
 if [ -z "$1" ]; then
     echo "[!] Error: No device specified."
-    echo "Usage: $0 <device_name> [root|noroot|both] [hyperos|aosp|both]"
+    echo "Usage: $0 <device_name> [ksu_susfs|ksu_no_susfs|noroot|all] [hyperos|aosp|both]"
     exit 1
 fi
 
 DEVICE_NAME="$1"
 DEFCONFIG="${DEVICE_NAME}_defconfig"
 
-ROOT_MODE="${2:-root}"
+ROOT_MODE="${2:-ksu_susfs}"
 ROOT_MODE=$(echo "$ROOT_MODE" | tr '[:upper:]' '[:lower:]')
 case "$ROOT_MODE" in
-    ksu|root|true|1)
-        ROOT_MODE="root"
+    ksu_susfs|susfs|root)
+        ROOT_MODE="ksu_susfs"
+        ;;
+    ksu_no_susfs|nosusfs|ksu)
+        ROOT_MODE="ksu_no_susfs"
         ;;
     noroot|clean|false|0)
         ROOT_MODE="noroot"
         ;;
-    both)
-        ROOT_MODE="both"
+    all|both)
+        ROOT_MODE="all"
         ;;
     *)
-        ROOT_MODE="root"
+        ROOT_MODE="ksu_susfs"
         ;;
 esac
 
@@ -108,20 +111,16 @@ if ! grep -q "selinux,baseband_guard" security/Kconfig; then
 fi
 
 # ------------------------------------------
-# 3. KernelSU (RKSU / ReSukiSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup Function
+# 3. KernelSU Source & Universal Patch Setup
 # ------------------------------------------
-inject_ksu_susfs() {
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "⚡ Injecting ReSukiSU / KowSU Multi-Manager & SuSFS v2.3.0 Source..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+setup_ksu_sources() {
+    if [ ! -d "drivers/kernelsu" ]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "⚡ Injecting ReSukiSU / KowSU Multi-Manager & SuSFS v2.3.0 Source..."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
 
-    if [ -f "drivers/kernelsu/Kconfig" ]; then
-        sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
-        echo "[+] Default hook set to KSU_SUSFS in drivers/kernelsu/Kconfig"
-    fi
-
-    python3 -c '
+        python3 -c '
 import os
 
 candidates = [
@@ -157,24 +156,16 @@ if apk_sign_path:
         with open(apk_sign_path, "w") as f:
             f.write(content)
         print("✅ Patched " + apk_sign_path + " with universal manager package verification")
-    else:
-        print("ℹ️ " + apk_sign_path + " already patched or target signature pattern handled")
 ' 2>/dev/null || true
-
-    echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "[+] RKSU / ReSukiSU Multi-Manager Non-GKI setup finished."
+    fi
 }
 
 # ------------------------------------------
-# 4. Native FakeDreamer Adreno 650 Undervolt & Speed Bins (150MHz - 670MHz)
+# 4. Native FakeDreamer Adreno 650 Undervolt & Speed Bins
 # ------------------------------------------
 echo "[*] Applying Native FakeDreamer GPU Undervolt (150MHz - 670MHz) & Speed Bins..."
 if [ -f "kona-v2-gpu.dtsi" ]; then
     cp -f kona-v2-gpu.dtsi arch/arm64/boot/dts/vendor/qcom/kona-v2-gpu.dtsi
-    echo "[+] Copied FakeDreamer kona-v2-gpu.dtsi into kernel tree"
 fi
 
 cat > arch/arm64/boot/dts/vendor/qcom/kona-v2.1-gpu.dtsi << 'EOF'
@@ -182,20 +173,17 @@ cat > arch/arm64/boot/dts/vendor/qcom/kona-v2.1-gpu.dtsi << 'EOF'
 	qcom,chipid = <0x06050002>;
 };
 EOF
-echo "[+] kona-v2.1-gpu.dtsi set to pure FakeDreamer chipid override"
 
 # ------------------------------------------
-# 5. Inject Custom EXTREME+ Governor (Zero-Latency & Anti-Choke)
+# 5. Inject Custom EXTREME+ Governor
 # ------------------------------------------
 echo "[*] Injecting Custom EXTREME+ Governor into kernel/sched/..."
 if [ -f "cpufreq_extreme_plus.c" ]; then
     cp -f cpufreq_extreme_plus.c kernel/sched/cpufreq_extreme_plus.c
-    echo "[+] Copied cpufreq_extreme_plus.c to kernel/sched/"
 fi
 
 if ! grep -q "cpufreq_extreme_plus.o" kernel/sched/Makefile; then
     echo 'obj-$(CONFIG_CPU_FREQ_GOV_EXTREME_PLUS) += cpufreq_extreme_plus.o' >> kernel/sched/Makefile
-    echo "[+] Hooked cpufreq_extreme_plus.o into kernel/sched/Makefile"
 fi
 
 python3 -c '
@@ -209,8 +197,7 @@ gov_choice = """config CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
 \tselect CPU_FREQ_GOV_EXTREME_PLUS
 \tselect CPU_FREQ_GOV_PERFORMANCE
 \thelp
-\t  Use the "extreme+" CPUFreq governor by default. Zero latency,
-\t  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
+\t  Use the "extreme+" CPUFreq governor by default.
 """
 
 gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
@@ -219,8 +206,7 @@ gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
 \tselect CPU_FREQ_GOV_ATTR_SET
 \tselect IRQ_WORK
 \thelp
-\t  EXTREME+ governor based on scheduler utilization with active task
-\t  frame pacing floor, zero latency up-scaling, and 60ms decay window.
+\t  EXTREME+ governor based on scheduler utilization.
 """
 
 if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
@@ -228,73 +214,57 @@ if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
     text = text.replace("config CPU_FREQ_GOV_SCHEDUTIL", gov_def + "\nconfig CPU_FREQ_GOV_SCHEDUTIL")
     with open(path_kconfig, "w") as f:
         f.write(text)
-    print("✅ Injected EXTREME+ governor definitions into drivers/cpufreq/Kconfig")
-else:
-    print("ℹ️ EXTREME+ governor already in drivers/cpufreq/Kconfig")
 '
 
 # ------------------------------------------
 # 6. Apply Performance, EAS, Charging & VM Patches
 # ------------------------------------------
-if [ -f "apply-cpu-cap.py" ]; then
-    echo "[*] Ensuring full-range 3.19 GHz Prime Core driver & DTS alignment..."
-    python3 apply-cpu-cap.py 3187200
-fi
-
-if [ -f "apply-fastcharge-bypass.py" ]; then
-    echo "[*] Applying safe PD/PPS Fast Charge & Thermal DTS Stepping patches..."
-    python3 apply-fastcharge-bypass.py
-fi
-
-if [ -f "apply-bootloader-spoof.py" ]; then
-    echo "[*] Applying bootloader spoofing kernel hooks..."
-    python3 apply-bootloader-spoof.py . || true
-fi
-
-if [ -f "apply-eas-tuning.py" ]; then
-    echo "[*] Applying EAS Energy Model & Capacity Margin Tuning..."
-    python3 apply-eas-tuning.py arch/arm64/boot/dts/vendor/qcom/kona.dtsi || echo "⚠️ EAS tuning failed, continuing..."
-fi
-
-if [ -f "apply-vmscan-critical.py" ]; then
-    echo "[*] Applying Critical Task Direct Reclaim Anti-Stutter Patch (Google ACK fix)..."
-    python3 apply-vmscan-critical.py mm/vmscan.c || echo "⚠️ vmscan patch skipped"
-fi
-
-if [ -f "apply-millet-compat.py" ]; then
-    echo "[*] Applying Xiaomi HyperOS 4 / MIUI Universal Millet Dual-ABI Compatibility Patch..."
-    python3 apply-millet-compat.py . || echo "⚠️ Millet patch skipped"
-fi
+[ -f "apply-cpu-cap.py" ] && python3 apply-cpu-cap.py 3187200
+[ -f "apply-fastcharge-bypass.py" ] && python3 apply-fastcharge-bypass.py
+[ -f "apply-bootloader-spoof.py" ] && python3 apply-bootloader-spoof.py . || true
+[ -f "apply-eas-tuning.py" ] && python3 apply-eas-tuning.py arch/arm64/boot/dts/vendor/qcom/kona.dtsi || true
+[ -f "apply-vmscan-critical.py" ] && python3 apply-vmscan-critical.py mm/vmscan.c || true
+[ -f "apply-millet-compat.py" ] && python3 apply-millet-compat.py . || true
 
 if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
     sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 0;/' kernel/sched/cpufreq_schedutil.c
-    echo "[+] Schedutil up_rate_limit_us set to 0 in kernel/sched/cpufreq_schedutil.c for lightning boot"
 fi
 
 if [ -f "fs/dcache.c" ]; then
     sed -i 's/int sysctl_vfs_cache_pressure __read_mostly = [0-9]*;/int sysctl_vfs_cache_pressure __read_mostly = 50;/' fs/dcache.c
-    echo "[+] Optimized sysctl_vfs_cache_pressure to 50 in fs/dcache.c for instant app launch"
 fi
 
 # ------------------------------------------
-# 7. Clone AnyKernel3 Base Template
+# 7. AnyKernel3 Template
 # ------------------------------------------
 echo "[*] Cloning AnyKernel3 base template..."
 rm -rf anykernel_template
 if ! git clone --depth=1 https://github.com/re-noroi/anykernel3-test -b munch anykernel_template; then
-    echo "[!] Fallback to AstideLabs AnyKernel3..."
     git clone --depth=1 https://github.com/AstideLabs/AnyKernel3 -b kona anykernel_template
 fi
 rm -rf anykernel_template/.git
 
 # ==============================================================================
-# MODULAR BUILD FUNCTION (HyperOS vs AOSP)
+# MODULAR BUILD FUNCTION
 # ==============================================================================
 build_target_os() {
     local OS="$1"
     local ENABLE_KSU="${2:-0}"
+    local ENABLE_SUSFS="${3:-0}"
     local OS_UPPER=$(echo "$OS" | tr '[:lower:]' '[:upper:]')
-    local ROOT_LABEL=$([ "$ENABLE_KSU" -eq 1 ] && echo "KowSU + SuSFS v2.3.0" || echo "Pure Clean Base")
+    
+    local ROOT_LABEL="Pure Clean Base"
+    local FILE_SUFFIX="NoRoot"
+    if [ "$ENABLE_KSU" -eq 1 ]; then
+        if [ "$ENABLE_SUSFS" -eq 1 ]; then
+            ROOT_LABEL="KowSU + SuSFS v2.3.0"
+            FILE_SUFFIX="KSU_SuSFS"
+        else
+            ROOT_LABEL="KowSU (No SuSFS)"
+            FILE_SUFFIX="KSU_NoSuSFS"
+        fi
+    fi
+
     local OUT_DIR="${KERNEL_DIR}/out_${OS}"
     local MAKE_OPTS=(
         O="${OUT_DIR}"
@@ -310,20 +280,17 @@ build_target_os() {
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🔨 Starting Kernel Compilation for ${DEVICE_NAME} (Target: ${OS_UPPER} | ${ROOT_LABEL})"
+    echo "🔨 Starting Compilation: ${DEVICE_NAME} (OS: ${OS_UPPER} | Mode: ${ROOT_LABEL})"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     rm -rf "${OUT_DIR}"
     mkdir -p "${OUT_DIR}"
 
-    echo "[*] Generating Defconfig (${DEFCONFIG}) for ${OS_UPPER}..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" "${DEFCONFIG}"
 
-    # 1. Baseband-guard
-    scripts/config --file "${OUT_DIR}/.config" -e BBG
-
-    # 2. Adreno TrustZone GPU Devfreq Governor & Bus Monitor
+    # General Hardware & Scheduler Flags
     scripts/config --file "${OUT_DIR}/.config" \
+        -e BBG \
         -e PM_DEVFREQ \
         -e DEVFREQ_GOV_SIMPLE_ONDEMAND \
         -e DEVFREQ_GOV_PERFORMANCE \
@@ -334,28 +301,19 @@ build_target_os() {
         -e DEVFREQ_GOV_QCOM_GPUBW_MON \
         -e QCOM_KGSL \
         -e QCOM_KGSL_IOMMU \
-        --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
-
-    # 3. ZRAM ZSTD Zero-Stutter Memory Compression
-    scripts/config --file "${OUT_DIR}/.config" \
+        --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz" \
         -e ZRAM \
         -e CRYPTO_ZSTD \
         -e ZSTD_COMPRESS \
         -e ZSTD_DECOMPRESS \
         -e ZRAM_DEF_COMP_ZSTD \
         -d ZRAM_DEF_COMP_LZ4 \
-        --set-str ZRAM_DEF_COMP "zstd"
-
-    # 4. Ultra-Fast & Safe Boot (Zero-Latency EXTREME+ Governor)
-    scripts/config --file "${OUT_DIR}/.config" \
+        --set-str ZRAM_DEF_COMP "zstd" \
         -e CPU_FREQ_GOV_SCHEDUTIL \
         -e CPU_FREQ_GOV_EXTREME_PLUS \
         -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
         -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
-        --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
-
-    # 5. TCP BBR Congestion Control & Lightweight Gaming Tunables
-    scripts/config --file "${OUT_DIR}/.config" \
+        --set-str CPU_FREQ_DEFAULT_GOV "extreme+" \
         -e TCP_CONG_BBR \
         -e DEFAULT_BBR \
         --set-str DEFAULT_TCP_CONG "bbr" \
@@ -370,29 +328,42 @@ build_target_os() {
         -d DEBUG_KMEMLEAK \
         -d DEBUG_PREEMPT
 
-    # 6. Root Configuration (KowSU / ReSukiSU + SuSFS v2.3.0 vs Pure Clean Base)
+    # Root Configuration (KSU + SuSFS vs KSU No SuSFS vs Noroot)
     if [ "$ENABLE_KSU" -eq 1 ]; then
-        echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
-        scripts/config --file "${OUT_DIR}/.config" \
-            -e KSU \
-            -e KSU_SUSFS \
-            -d KSU_TRACEPOINT_HOOK \
-            -d KSU_MANUAL_HOOK \
-            -e KSU_MULTI_MANAGER_SUPPORT \
-            -e THREAD_INFO_IN_TASK \
-            -e KSU_SUSFS_SUS_PATH \
-            -e KSU_SUSFS_SUS_MOUNT \
-            -e KSU_SUSFS_SUS_KSTAT \
-            -e KSU_SUSFS_SPOOF_UNAME \
-            -e KSU_SUSFS_ENABLE_LOG \
-            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            -e KSU_SUSFS_OPEN_REDIRECT \
-            -e KSU_SUSFS_SUS_MAP \
-            -d KSU_DISABLE_MANAGER \
-            -d KSU_DISABLE_POLICY
+        if [ "$ENABLE_SUSFS" -eq 1 ]; then
+            echo "[*] Injecting KowSU + SuSFS v2.3.0 Config..."
+            scripts/config --file "${OUT_DIR}/.config" \
+                -e KSU \
+                -e KSU_SUSFS \
+                -d KSU_TRACEPOINT_HOOK \
+                -d KSU_MANUAL_HOOK \
+                -e KSU_MULTI_MANAGER_SUPPORT \
+                -e THREAD_INFO_IN_TASK \
+                -e KSU_SUSFS_SUS_PATH \
+                -e KSU_SUSFS_SUS_MOUNT \
+                -e KSU_SUSFS_SUS_KSTAT \
+                -e KSU_SUSFS_SPOOF_UNAME \
+                -e KSU_SUSFS_ENABLE_LOG \
+                -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+                -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+                -e KSU_SUSFS_OPEN_REDIRECT \
+                -e KSU_SUSFS_SUS_MAP \
+                -d KSU_DISABLE_MANAGER \
+                -d KSU_DISABLE_POLICY
+        else
+            echo "[*] Injecting KowSU (No SuSFS) Config..."
+            scripts/config --file "${OUT_DIR}/.config" \
+                -e KSU \
+                -d KSU_SUSFS \
+                -d KSU_TRACEPOINT_HOOK \
+                -d KSU_MANUAL_HOOK \
+                -e KSU_MULTI_MANAGER_SUPPORT \
+                -d KSU_DISABLE_MANAGER \
+                -d KSU_DISABLE_POLICY
+            sed -i '/CONFIG_KSU_SUSFS/d' "${OUT_DIR}/.config" 2>/dev/null || true
+        fi
     else
-        echo "[*] Disabling embedded KSU for Pure Clean Kernel (${OS_UPPER})..."
+        echo "[*] Disabling embedded KSU for Pure Clean Kernel..."
         scripts/config --file "${OUT_DIR}/.config" \
             -d KSU \
             -d KSU_SUSFS \
@@ -402,18 +373,15 @@ build_target_os() {
         sed -i '/CONFIG_KSU/d' "${OUT_DIR}/.config" 2>/dev/null || true
     fi
 
-    # 7. Target-Specific Kernel Subsystems & Settings
+    # OS Subsystems
     local LOCALVER
     local TITLE
     local ZIP_BASE
-    local OS_BADGE
 
     if [ "$OS" == "hyperos" ]; then
-        echo "[*] Injecting Xiaomi HyperOS / HyperOS 4 Subsystems..."
         LOCALVER="-Extreme++Gaming-HyperOS-BMW"
         TITLE="Extreme++Gaming BMW Edition [HyperOS] | POCO F4 (munch)"
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_HyperOS"
-        OS_BADGE="HyperOS 4 / HyperOS (Android 13–17)"
 
         scripts/config --file "${OUT_DIR}/.config" \
             --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
@@ -450,11 +418,9 @@ build_target_os() {
             -d REKERNEL_NETWORK \
             -d LTO_CLANG_THIN -d CFI_CLANG
     else
-        echo "[*] Injecting Clean AOSP Subsystems (Android 16 & 17 Tested & Verified)..."
         LOCALVER="-Extreme++Gaming-AOSP-BMW"
         TITLE="Extreme++Gaming BMW Edition [AOSP A16/A17] | POCO F4 (munch)"
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_AOSP"
-        OS_BADGE="AOSP Custom ROMs (Android 13–17 / A16 & A17 Tested)"
 
         scripts/config --file "${OUT_DIR}/.config" \
             --set-str STATIC_USERMODEHELPER_PATH "" \
@@ -494,21 +460,17 @@ build_target_os() {
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
 
-    # 8. Compile Master DTB Table & DTBO
-    echo "[*] Compiling ${OS_UPPER} Master DTB Table & DTBO Image..."
+    echo "[*] Compiling DTBs & DTBO Image..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
 
-    # 9. Compile Master Kernel Image
-    echo "[*] Compiling ${OS_UPPER} Master Kernel Image (3.19 GHz Monster Peak)..."
+    echo "[*] Compiling Image..."
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
 
     if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
-        echo "❌ [ERROR] ${OS_UPPER} Master Kernel Image did NOT compile!"
+        echo "❌ [ERROR] Image compile failed for ${OS_UPPER}!"
         exit 1
     fi
-    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully ($(du -h "${OUT_DIR}/arch/arm64/boot/Image" | cut -f1))"
 
-    # 10. AnyKernel3 Packaging for Target
     local AK_DIR="${KERNEL_DIR}/anykernel_${OS}"
     rm -rf "${AK_DIR}"
     cp -r anykernel_template "${AK_DIR}"
@@ -522,7 +484,6 @@ build_target_os() {
         cat ${OUT_DIR}/arch/arm64/boot/dts/vendor/qcom/*.dtb > "${AK_DIR}/dtb"
     fi
 
-    # anykernel.sh for target
     cat > "${AK_DIR}/anykernel.sh" << EOF
 ### AnyKernel3 Ramdisk Mod Script
 ## EXTREME++ ${OS_UPPER} Kernel for POCO F4 (munch) - BMW Edition
@@ -539,7 +500,6 @@ device.name2=POCO F4
 supported.versions=13-17
 '; }
 
-# shell variables
 block=boot;
 is_slot_device=1;
 ramdisk_compression=auto;
@@ -549,29 +509,17 @@ patch_vbmeta_flag=0;
 
 ui_print " ";
 ui_print " ══════════════════════════════════════════════";
-ui_print "   ______      __                              ";
-ui_print "  / ____/  __ / /_ _____ ___   ____ ___ ___    ";
-ui_print " / __/ | |/_// __// ___// _ \\ / __ '__// _ \\   ";
-ui_print "/ /___ _>  < / /_ / /   /  __// / / / /  __/   ";
-ui_print "\\____//_/|_| \\__//_/    \\___//_/ /_/ / \\___/   ";
-ui_print "                 [ + + ]                       ";
-ui_print " ══════════════════════════════════════════════";
 ui_print "  🏎️  EDITION : BMW Gaming Edition (${OS_UPPER}) ";
 ui_print "  👑  AUTHOR  : Extreme++ by @pandey_ji_8      ";
 ui_print "  📱  DEVICE  : POCO F4 (munch) | ${OS_UPPER}  ";
 ui_print "  ⚡  CLOCK   : 3.19 GHz Unlocked Monster Peak ";
-ui_print "  🚀  PROFILES: In-Kernel Dynamic Switcher     ";
-ui_print "  🛡️  ROOT    : $([ "$ENABLE_KSU" -eq 1 ] && echo 'KowSU + SuSFS v2.3.0' || echo 'Pure Clean Base (No Root)') ";
+ui_print "  🛡️  ROOT    : ${ROOT_LABEL} ";
 ui_print " ══════════════════════════════════════════════";
 ui_print " ";
 
-ui_print "  [1/4] ⚡ Extracting & Patching Boot Partition...";
 dump_boot;
-ui_print "  [1/4] 🚀 Writing EXTREME++ 3.19 GHz Kernel Image...";
 write_boot;
 
-## vendor_boot DTB install
-ui_print "  [2/4] 📦 Analyzing Vendor Boot Partition...";
 block=vendor_boot;
 is_slot_device=1;
 ramdisk_compression=auto;
@@ -579,92 +527,71 @@ patch_vbmeta_flag=0;
 
 reset_ak;
 dump_boot;
-ui_print "  [2/4] 🏎️ Writing FakeDreamer Adreno 650 Undervolted DTB...";
 write_boot;
 
-# Clean conflicting legacy service.d scripts from /data/adb (Fixes Poco logo freeze & bootloops)
-ui_print "  [3/4] 🛡️ Checking Storage & Subsystems...";
 mount /data 2>/dev/null
 if [ -d /data/adb ]; then
-    ui_print "  [3/4] 🧹 Auto-purging conflicting legacy scripts from /data/adb...";
     rm -f /data/adb/service.d/00-extreme-performance.sh
     rm -f /data/adb/post-fs-data.d/00-extreme-props.sh
 fi
 
-ui_print "  [4/4] ✨ Preserving OEM Display Calibrations & Finalizing...";
-ui_print " ";
-ui_print " ══════════════════════════════════════════════";
 ui_print "  🎉 Extreme++ Kernel (${OS_UPPER}) Flashed!  ";
-ui_print "  🏎️ BMW Edition is Ready to Rock!             ";
 ui_print " ══════════════════════════════════════════════";
-ui_print " ";
 EOF
 
-    # Package into flashable ZIP
     local DATE_TAG="$(date +'%d%b%Y_%H%M')"
-    local ZIP_NAME
-    if [ "$ENABLE_KSU" -eq 1 ]; then
-        ZIP_NAME="${ZIP_BASE}_KowSU_${DATE_TAG}.zip"
-    else
-        ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
-    fi
+    local ZIP_NAME="${ZIP_BASE}_${FILE_SUFFIX}_${DATE_TAG}.zip"
 
     (
         cd "${AK_DIR}"
         zip -r9 "../${ZIP_NAME}" ./* -x .gitignore out/ ./*.zip > /dev/null
     )
-
-    echo "[+] =========================================================="
-    echo "[+] SUCCESS! ${OS_UPPER} package ready: ${ZIP_NAME}"
-    echo "[+] =========================================================="
+    echo "[+] SUCCESS! ${ZIP_NAME}"
 }
 
-# ==============================================================================
-# EXECUTE REQUESTED TARGET BUILDS
-# ==============================================================================
-if [ "$ROOT_MODE" == "noroot" ]; then
-    echo "[*] Executing Pure Clean Non-Root Build..."
-    sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 0
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 0
-    fi
-elif [ "$ROOT_MODE" == "root" ]; then
-    echo "[*] Executing KowSU + SuSFS v2.3.0 Root Build..."
-    inject_ksu_susfs
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 1
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 1
-    fi
-elif [ "$ROOT_MODE" == "both" ]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 DUAL BUILD REQUESTED: Compiling BOTH Non-Root & Root Variants!"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# ------------------------------------------
+# Trình điều phối Build theo OS và ROOT_MODE
+# ------------------------------------------
+run_build() {
+    local OS_TARGET="$1"
+    local KSU_FLAG="$2"
+    local SUSFS_FLAG="$3"
 
-    echo ""
-    echo "[*] Phase 1/2: Compiling Pure Clean Non-Root Variant(s)..."
-    sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 0
+    if [ "$OS_TARGET" == "hyperos" ] || [ "$OS_TARGET" == "both" ]; then
+        build_target_os "hyperos" "$KSU_FLAG" "$SUSFS_FLAG"
     fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 0
+    if [ "$OS_TARGET" == "aosp" ] || [ "$OS_TARGET" == "both" ]; then
+        build_target_os "aosp" "$KSU_FLAG" "$SUSFS_FLAG"
     fi
+}
 
-    echo ""
-    echo "[*] Phase 2/2: Compiling Root (KowSU + SuSFS v2.3.0) Variant(s)..."
-    inject_ksu_susfs
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 1
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 1
-    fi
-fi
+case "$ROOT_MODE" in
+    ksu_susfs)
+        setup_ksu_sources
+        run_build "$TARGET_OS" 1 1
+        ;;
+    ksu_no_susfs)
+        setup_ksu_sources
+        run_build "$TARGET_OS" 1 0
+        ;;
+    noroot)
+        run_build "$TARGET_OS" 0 0
+        ;;
+    all)
+        echo "🚀 COMPILING ALL 3 VARIANTS: NoRoot, KSU No-SuSFS, KSU+SuSFS..."
+        # 1. No Root
+        run_build "$TARGET_OS" 0 0
+        
+        # 2. Setup nguồn KSU
+        setup_ksu_sources
+        
+        # 3. KSU No SuSFS
+        run_build "$TARGET_OS" 1 0
+        
+        # 4. KSU + SuSFS
+        run_build "$TARGET_OS" 1 1
+        ;;
+esac
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
