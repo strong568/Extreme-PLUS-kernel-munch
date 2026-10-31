@@ -69,6 +69,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🚀 EXTREME++ BMW Edition Build Engine Initiated!"
 echo "   Device: POCO F4 (munch / SM8250-AC)"
 echo "   Root Mode: ${ROOT_MODE} (SuSFS Ref: ${SUSFS_VER})"
+echo "   Patch Branch Ref: ${PATCH_BRANCH:-default}"
 echo "   Target Mode: ${TARGET_OS}"
 echo "   System Cores: ${TOTAL_CORES} (Running at Full Speed)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -181,7 +182,7 @@ if apk_sign_path:
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
             !strcmp(pkg_buf, "com.resukisu")) {
-            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\n", pkg_buf);
+            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
             *signature_index = 0;
             return true;
         }
@@ -233,30 +234,28 @@ with open(path_kconfig, "r") as f:
     text = f.read()
 
 gov_choice = """config CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
-	bool "extreme+"
-	depends on SMP
-	select CPU_FREQ_GOV_EXTREME_PLUS
-	select CPU_FREQ_GOV_PERFORMANCE
-	help
-	  Use the "extreme+" CPUFreq governor by default. Zero latency,
-	  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
+\tbool "extreme+"
+\tdepends on SMP
+\tselect CPU_FREQ_GOV_EXTREME_PLUS
+\tselect CPU_FREQ_GOV_PERFORMANCE
+\thelp
+\t  Use the "extreme+" CPUFreq governor by default. Zero latency,
+\t  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
 """
 
 gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
-	bool "'extreme+' cpufreq policy governor"
-	depends on CPU_FREQ && SMP
-	select CPU_FREQ_GOV_ATTR_SET
-	select IRQ_WORK
-	help
-	  EXTREME+ governor based on scheduler utilization with active task
-	  frame pacing floor, zero latency up-scaling, and 60ms decay window.
+\tbool "\x27extreme+\x27 cpufreq policy governor"
+\tdepends on CPU_FREQ && SMP
+\tselect CPU_FREQ_GOV_ATTR_SET
+\tselect IRQ_WORK
+\thelp
+\t  EXTREME+ governor based on scheduler utilization with active task
+\t  frame pacing floor, zero latency up-scaling, and 60ms decay window.
 """
 
 if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
-    text = text.replace("config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL", gov_choice + "
-config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL")
-    text = text.replace("config CPU_FREQ_GOV_SCHEDUTIL", gov_def + "
-config CPU_FREQ_GOV_SCHEDUTIL")
+    text = text.replace("config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL", gov_choice + "\nconfig CPU_FREQ_DEFAULT_GOV_SCHEDUTIL")
+    text = text.replace("config CPU_FREQ_GOV_SCHEDUTIL", gov_def + "\nconfig CPU_FREQ_GOV_SCHEDUTIL")
     with open(path_kconfig, "w") as f:
         f.write(text)
     print("✅ Injected EXTREME+ governor definitions into drivers/cpufreq/Kconfig")
@@ -469,9 +468,9 @@ ui_print " ";
 ui_print " ══════════════════════════════════════════════";
 ui_print "   ______      __                              ";
 ui_print "  / ____/  __ / /_ _____ ___   ____ ___ ___    ";
-ui_print " / __/ | |/_// __// ___// _ \ / __ '__// _ \   ";
+ui_print " / __/ | |/_// __// ___// _ \\ / __ '__// _ \\   ";
 ui_print "/ /___ _>  < / /_ / /   /  __// / / / /  __/   ";
-ui_print "\____//_/|_| \__//_/    \___//_/ /_/ / \___/   ";
+ui_print "\\____//_/|_| \\__//_/    \\___//_/ /_/ / \\___/   ";
 ui_print "                 [ + + ]                       ";
 ui_print " ══════════════════════════════════════════════";
 ui_print "  🏎️  EDITION : BMW Gaming Edition (${OS_UPPER}) ";
