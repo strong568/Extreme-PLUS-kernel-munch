@@ -135,11 +135,12 @@ inject_ksu_driver() {
         curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
     fi
 
-    # Vượt qua lệnh chặn Non-GKI TP hook của ReSukiSU Kbuild
+    # XÓA TRIỆT ĐỂ lệnh $(error ...) chặn Non-GKI của ReSukiSU
     if [ -f "drivers/kernelsu/Kbuild" ]; then
-        sed -i 's/\$(error TP hooks are incompatible with Non-GKI/\$(warning TP hooks on Non-GKI/' drivers/kernelsu/Kbuild
+        sed -i '/TP hooks are incompatible with Non-GKI/d' drivers/kernelsu/Kbuild
+        echo "[+] Đã gỡ bỏ chốt chặn Non-GKI trong drivers/kernelsu/Kbuild"
     fi
-    
+
     if [ "$WITH_SUSFS" = "susfs" ]; then
         if [ -f "drivers/kernelsu/Kconfig" ]; then
             sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
@@ -152,9 +153,8 @@ inject_ksu_driver() {
         echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
     else
         if [ -f "drivers/kernelsu/Kconfig" ]; then
-            sed -i 's/default KSU_SUSFS/default KSU_MANUAL_HOOK/' drivers/kernelsu/Kconfig
-            sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_MANUAL_HOOK/' drivers/kernelsu/Kconfig
-            echo "[+] Default hook set to KSU_MANUAL_HOOK in drivers/kernelsu/Kconfig"
+            sed -i 's/default KSU_SUSFS/default KSU_TRACEPOINT_HOOK/' drivers/kernelsu/Kconfig
+            echo "[+] Default hook set to KSU_TRACEPOINT_HOOK in drivers/kernelsu/Kconfig"
         fi
         sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
         echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
