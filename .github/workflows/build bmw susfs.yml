@@ -49,35 +49,16 @@ jobs:
         run: |
           echo "[*] Scanning latest SuSFS tag from official upstream repository..."
           SUSFS_VER=""
-
-          # 1. Quét trực tiếp bằng git ls-remote (không bị ảnh hưởng bởi Cloudflare / API rate limit / 403 Forbidden)
           SUSFS_VER=$(git ls-remote --tags --refs https://gitlab.com/simonpunk/susfs4kernel.git 2>/dev/null | awk -F'/' '{print $NF}' | grep -E '^v[0-9]' | sort -V | tail -n 1 || true)
-
-          # 2. Dự phòng quét qua GitHub Mirror nếu GitLab chặn kết nối
           if [ -z "$SUSFS_VER" ]; then
             SUSFS_VER=$(git ls-remote --tags --refs https://github.com/simonpunk/susfs4kernel.git 2>/dev/null | awk -F'/' '{print $NF}' | grep -E '^v[0-9]' | sort -V | tail -n 1 || true)
           fi
-
-          # 3. Dự phòng quét qua REST API với xử lý JSON an toàn (tránh lỗi jq văng exit code 5 khi gặp Object 403)
           if [ -z "$SUSFS_VER" ]; then
-            SUSFS_VER=$(python3 -c '
-import urllib.request, json
-try:
-    req = urllib.request.Request("https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4kernel/repository/tags", headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=5) as r:
-        data = json.loads(r.read().decode())
-        if isinstance(data, list) and len(data) > 0 and "name" in data[0]:
-            print(data[0]["name"])
-except Exception:
-    pass
-' 2>/dev/null || true)
+            SUSFS_VER=$(curl -sL "https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4kernel/repository/tags" 2>/dev/null | grep -o '"name":"v[0-9][^"]*"' | head -n 1 | cut -d'"' -f4 || true)
           fi
-
-          # 4. Fallback mặc định an toàn tuyệt đối
           if [ -z "$SUSFS_VER" ] || [ "$SUSFS_VER" = "null" ]; then
             SUSFS_VER="v2.3.0"
           fi
-
           echo "✅ Detected SuSFS Version: $SUSFS_VER"
           echo "SUSFS_VER=$SUSFS_VER" >> $GITHUB_ENV
           echo "SUSFS_VERSION=$SUSFS_VER" >> $GITHUB_ENV
@@ -170,9 +151,6 @@ except Exception:
             echo "ℹ️ HyperOS output not found. Skipping raw images zip."
           fi
 
-      # ----------------------------------------------------
-      # Quét & Tải toàn bộ APK KernelSU Manager (Chỉ ARM64)
-      # ----------------------------------------------------
       - name: "📲 Fetch All KernelSU Managers (ARM64)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -241,7 +219,6 @@ except Exception:
             fi
           done
 
-          # Fetch CI Action Artifacts from BakaSU
           BAKA_RUNS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
           BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.event == "pull_request") or (.head_branch | test("pr|pull"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty' 2>/dev/null || true)
           RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select((.head_branch | test("resuki"; "i")) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty' 2>/dev/null || true)
@@ -276,19 +253,15 @@ except Exception:
           fetch_action_artifact "Baka-SU/BakaSU" "$BAKASU_PR_RUN_ID" "Action_BakaSU_PR"
           fetch_action_artifact "Baka-SU/BakaSU" "$RESUKISU_RUN_ID" "Action_ReSukiSU"
 
-          # SukiSU-Ultra Actions
           SUKI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '.[0].id // .workflow_runs[0].id // empty' 2>/dev/null || true)
           fetch_action_artifact "SukiSU-Ultra/SukiSU-Ultra" "$SUKI_RUN_ID" "Action_SukiSU"
 
-          # KOWX712 Actions
           KOWX_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=1" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)
           fetch_action_artifact "KOWX712/KernelSU" "$KOWX_RUN_ID" "Action_KOWX"
 
-          # Midori01 Actions
           MIDORI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/midori01/KernelSU/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)
           fetch_action_artifact "midori01/KernelSU" "$MIDORI_RUN_ID" "Action_midori01"
 
-          # FinaSU Actions
           FINA_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/LyraVoid/FinaSU/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '.workflow_runs[0].id // empty' 2>/dev/null || true)
           fetch_action_artifact "LyraVoid/FinaSU" "$FINA_RUN_ID" "Action_FinaSU"
 
