@@ -135,6 +135,11 @@ inject_ksu_driver() {
         curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
     fi
 
+    # Vượt qua lệnh chặn Non-GKI TP hook của ReSukiSU Kbuild
+    if [ -f "drivers/kernelsu/Kbuild" ]; then
+        sed -i 's/\$(error TP hooks are incompatible with Non-GKI/\$(warning TP hooks on Non-GKI/' drivers/kernelsu/Kbuild
+    fi
+    
     if [ "$WITH_SUSFS" = "susfs" ]; then
         if [ -f "drivers/kernelsu/Kconfig" ]; then
             sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
@@ -433,8 +438,8 @@ build_target_os() {
         scripts/config --file "${OUT_DIR}/.config" \
             -e KSU \
             -d KSU_SUSFS \
-            -d KSU_TRACEPOINT_HOOK \
-            -e KSU_MANUAL_HOOK \
+            -e KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK \
             -e KSU_MULTI_MANAGER_SUPPORT \
             -e THREAD_INFO_IN_TASK \
             -d KSU_SUSFS_SUS_PATH \
