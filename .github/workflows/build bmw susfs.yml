@@ -1,0 +1,319 @@
+name: "🚀 Build bmw susfs EXTREME++ Kernel & Publish All KSU Managers"
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch_branch:
+        description: 'Nhánh chứa patch (Mặc định: bmw_ResukiSU_Susfs)'
+        required: true
+        type: string
+        default: 'bmw_ResukiSU_Susfs'
+      root_mode:
+        description: 'Root Variant: root (SuSFS mới nhất) | ksu_nosusfs (KernelSU không SuSFS) | noroot (Clean) | both | all'
+        required: true
+        type: choice
+        default: 'root'
+        options:
+          - 'root'
+          - 'ksu_nosusfs'
+          - 'noroot'
+          - 'both'
+          - 'all'
+      target_os:
+        description: 'Target OS: both | hyperos | aosp'
+        required: true
+        type: choice
+        default: 'both'
+        options:
+          - 'both'
+          - 'hyperos'
+          - 'aosp'
+
+jobs:
+  build_and_release:
+    name: "Compile Kernel & Release with Managers"
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    timeout-minutes: 180
+
+    steps:
+      - name: "📦 Checkout config & patch repo"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.patch_branch }}
+
+      - name: "🔍 Scan Latest SuSFS Version"
+        id: scan_susfs
+        run: |
+          echo "[*] Scanning latest SuSFS tag from official upstream repository..."
+          SUSFS_VER=$(curl -sL "https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4kernel/repository/tags" | jq -r '.[0].name // empty')
+          if [ -z "$SUSFS_VER" ] || [ "$SUSFS_VER" = "null" ]; then
+            SUSFS_VER=$(git ls-remote --tags --refs https://gitlab.com/simonpunk/susfs4kernel.git 2>/dev/null | awk -F'/' '{print $NF}' | grep -E '^v[0-9]' | sort -V | tail -n 1)
+          fi
+          if [ -z "$SUSFS_VER" ]; then
+            SUSFS_VER="v2.3.0"
+          fi
+          echo "✅ Detected SuSFS Version: $SUSFS_VER"
+          echo "SUSFS_VER=$SUSFS_VER" >> $GITHUB_ENV
+          echo "SUSFS_VERSION=$SUSFS_VER" >> $GITHUB_ENV
+
+      - name: "🛠️ Install build dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip jq
+
+      - name: "⚡ Setup ZyC-Clang 16"
+        run: |
+          mkdir -p $HOME/zyc-clang
+          curl -L "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260807-release/Clang-16.0.6-20260807.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C $HOME/zyc-clang
+          rm clang.tar.gz
+
+      - name: "🌐 Clone kernel source"
+        run: |
+          git clone --depth=1 -b android17-aptusitu https://github.com/AstideLabs/android_kernel_xiaomi_sm8250 kernel
+
+      - name: "⚙️ Inject PandeyJI Custom Build Script & Patches"
+        run: |
+          echo "[*] Injecting patches from branch '${{ inputs.patch_branch }}'..."
+          if [ -d "patches" ]; then
+            cp -r patches/* kernel/
+            echo "✅ Successfully copied contents of patches/ into kernel tree"
+          else
+            echo "ℹ️ No patches directory found in branch root, looking for loose patches..."
+            find . -maxdepth 1 -name "*.patch" -o -name "*.py" -o -name "*.c" -o -name "*.dtsi" | while read -r f; do
+              [ -f "$f" ] && cp -f "$f" kernel/
+            done
+          fi
+          cp -f build_kernel.sh kernel/build_kernel.sh 2>/dev/null || true
+          chmod +x kernel/build_kernel.sh
+
+      - name: "💾 Allocate 10GB Swap Memory (Anti-Crash Hack)"
+        run: |
+          echo "[*] Checking current RAM..."
+          free -h
+          sudo fallocate -l 10G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          echo "[*] New RAM Capacity:"
+          free -h
+
+      - name: "🔨 Compile EXTREME++ Kernel"
+        run: |
+          cd kernel
+          export SUSFS_VERSION="${{ env.SUSFS_VER }}"
+          export PATCH_BRANCH="${{ inputs.patch_branch }}"
+          ./build_kernel.sh munch "${{ inputs.root_mode }}" "${{ inputs.target_os }}"
+          
+          echo "✅ Built ZIP files:"
+          ls -lh EXTREME++*.zip
+
+      - name: "📦 Package Raw Kernel Images for HyperOS (.img / dtb)"
+        if: success()
+        run: |
+          IMG_DIR="$GITHUB_WORKSPACE/raw_kernel_images_staging"
+          OUT_ZIP_DIR="$GITHUB_WORKSPACE/raw_images"
+          mkdir -p "$IMG_DIR" "$OUT_ZIP_DIR"
+
+          HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out_hyperos/arch/arm64/boot"
+          if [ ! -d "$HYPEROS_BOOT" ]; then
+            HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot"
+          fi
+
+          if [ -d "$HYPEROS_BOOT" ] && [ -f "$HYPEROS_BOOT/Image" ]; then
+            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/Image"
+            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/kernel.img"
+            [ -f "$HYPEROS_BOOT/dtbo.img" ] && cp -f "$HYPEROS_BOOT/dtbo.img" "$IMG_DIR/dtbo.img"
+            if [ -f "$HYPEROS_BOOT/dtb" ]; then
+              cp -f "$HYPEROS_BOOT/dtb" "$IMG_DIR/dtb"
+              cp -f "$HYPEROS_BOOT/dtb" "$IMG_DIR/dtb.img"
+            elif [ -f "$HYPEROS_BOOT/dtb.img" ]; then
+              cp -f "$HYPEROS_BOOT/dtb.img" "$IMG_DIR/dtb.img"
+              cp -f "$HYPEROS_BOOT/dtb.img" "$IMG_DIR/dtb"
+            fi
+            find "$HYPEROS_BOOT" -maxdepth 1 -name "*.img" -exec cp -f {} "$IMG_DIR/" \; 2>/dev/null || true
+
+            RAW_ZIP_NAME="EXTREME++_HyperOS_Raw_Images_Build_${{ github.run_number }}.zip"
+            (
+              cd "$IMG_DIR"
+              zip -9 -r "$OUT_ZIP_DIR/$RAW_ZIP_NAME" ./*
+            )
+            rm -rf "$IMG_DIR"
+            echo "✅ Created HyperOS Raw Images ZIP: $OUT_ZIP_DIR/$RAW_ZIP_NAME"
+          else
+            echo "ℹ️ HyperOS output not found. Skipping raw images zip."
+          fi
+
+      # ----------------------------------------------------
+      # Quét & Tải toàn bộ APK KernelSU Manager (Chỉ ARM64)
+      # ----------------------------------------------------
+      - name: "📲 Fetch All KernelSU Managers (ARM64)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p apk_output
+          REPOS=(
+            "rsuntk/KernelSU"
+            "tiann/KernelSU"
+            "Baka-SU/BakaSU"
+            "SukiSU-Ultra/SukiSU-Ultra"
+            "backslashxx/KernelSU"
+            "KernelSU-Next/KernelSU-Next"
+            "midori01/KernelSU"
+            "LyraVoid/FinaSU"
+          )
+
+          COUNT=0
+
+          for repo in "${REPOS[@]}"; do
+            echo "[*] Processing Release: $repo"
+            OWNER="${repo%%/*}"
+            API_URL="https://api.github.com/repos/${repo}/releases"
+            DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
+
+            if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
+              BAKA_REL_URL=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty')
+              BAKA_REL_NAME=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .name // empty')
+              RESUKI_REL_URL=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty')
+              RESUKI_REL_NAME=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .name // empty')
+
+              [ -n "$BAKA_REL_URL" ] && curl -fLSs -o "apk_output/Release_BakaSU_${BAKA_REL_NAME}" "$BAKA_REL_URL" && COUNT=$((COUNT + 1))
+              [ -n "$RESUKI_REL_URL" ] && curl -fLSs -o "apk_output/Release_ReSukiSU_${RESUKI_REL_NAME}" "$RESUKI_REL_URL" && COUNT=$((COUNT + 1))
+              continue
+            fi
+
+            ASSET_INFO=$(echo "$DATA" | jq -r '
+              [ .[] | {
+                  tag: .tag_name, 
+                  asset: (
+                    (.assets[]? | select(.name | test("arm64-v8a.*\\.apk$"; "i"))) //
+                    (.assets[]? | select(.name | test("universal.*\\.apk$"; "i"))) //
+                    (.assets[]? | select(.name | test("\\.apk$"; "i")))
+                  )
+                } 
+              ] | map(select(.asset != null)) | first // empty
+            ')
+
+            APK_URL=$(echo "$ASSET_INFO" | jq -r '.asset.browser_download_url // empty')
+            RAW_FILE_NAME=$(echo "$ASSET_INFO" | jq -r '.asset.name // empty')
+            VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
+
+            if [ -n "$APK_URL" ]; then
+              if [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+                FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
+                FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
+              elif [[ "$repo" == "midori01/KernelSU" ]]; then
+                FILE_NAME="Release_midori01_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "LyraVoid/FinaSU" ]]; then
+                FILE_NAME="Release_FinaSU_${RAW_FILE_NAME}"
+              else
+                FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
+              fi
+              curl -fLSs -o "apk_output/$FILE_NAME" "$APK_URL" || wget -q -O "apk_output/$FILE_NAME" "$APK_URL"
+              [ -s "apk_output/$FILE_NAME" ] && COUNT=$((COUNT + 1))
+            fi
+          done
+
+          # Fetch CI Action Artifacts from BakaSU
+          BAKA_RUNS_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
+          BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.event == "pull_request") or (.head_branch | test("pr|pull"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+          RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select((.head_branch | test("resuki"; "i")) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+          BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select((.event != "pull_request") and (.head_branch | test("main|master"; "i")) and (.head_branch | test("resuki"; "i") | not) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+
+          fetch_action_artifact() {
+            local REPO="$1"
+            local R_ID="$2"
+            local PREFIX="$3"
+            [ -z "$R_ID" ] && return 0
+            local ART_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${REPO}/actions/runs/${R_ID}/artifacts")
+            echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk|ksu|sukisu"; "i"))' | while read -r art; do
+              local ART_NAME=$(echo "$art" | jq -r '.name')
+              local ART_URL=$(echo "$art" | jq -r '.archive_download_url')
+              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -o "temp_${PREFIX}.zip" "$ART_URL"
+              if [ -s "temp_${PREFIX}.zip" ]; then
+                mkdir -p "ext_${PREFIX}"
+                unzip -q -o "temp_${PREFIX}.zip" -d "ext_${PREFIX}/"
+                local CHOSEN_APK=$(find "ext_${PREFIX}" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
+                [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find "ext_${PREFIX}" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+                [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find "ext_${PREFIX}" -type f -name "*.apk" | head -n 1)
+                if [ -n "$CHOSEN_APK" ]; then
+                  cp "$CHOSEN_APK" "apk_output/${PREFIX}_$(basename "$CHOSEN_APK")"
+                fi
+                rm -rf "temp_${PREFIX}.zip" "ext_${PREFIX}"
+              fi
+            done
+          }
+
+          fetch_action_artifact "Baka-SU/BakaSU" "$BAKASU_MAIN_RUN_ID" "Action_BakaSU"
+          fetch_action_artifact "Baka-SU/BakaSU" "$BAKASU_PR_RUN_ID" "Action_BakaSU_PR"
+          fetch_action_artifact "Baka-SU/BakaSU" "$RESUKISU_RUN_ID" "Action_ReSukiSU"
+
+          # SukiSU-Ultra Actions
+          SUKI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '.[0].id // .workflow_runs[0].id // empty')
+          fetch_action_artifact "SukiSU-Ultra/SukiSU-Ultra" "$SUKI_RUN_ID" "Action_SukiSU"
+
+          # KOWX712 Actions
+          KOWX_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/KOWX712/KernelSU/actions/runs?status=completed&conclusion=success&per_page=1" | jq -r '.workflow_runs[0].id // empty')
+          fetch_action_artifact "KOWX712/KernelSU" "$KOWX_RUN_ID" "Action_KOWX"
+
+          # Midori01 Actions
+          MIDORI_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/midori01/KernelSU/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '.workflow_runs[0].id // empty')
+          fetch_action_artifact "midori01/KernelSU" "$MIDORI_RUN_ID" "Action_midori01"
+
+          # FinaSU Actions
+          FINA_RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/LyraVoid/FinaSU/actions/runs?status=completed&conclusion=success&per_page=5" | jq -r '.workflow_runs[0].id // empty')
+          fetch_action_artifact "LyraVoid/FinaSU" "$FINA_RUN_ID" "Action_FinaSU"
+
+          echo "[*] Total APKs fetched: $(find apk_output -type f -name "*.apk" | wc -l)"
+
+      - name: "📝 Generate Dynamic Release Notes"
+        run: |
+          RELEASE_DATE=$(date +'%Y-%m-%d %H:%M')
+          cat > release_notes.md << EOF
+          # 🏎️ EXTREME++ Kernel (BMW Edition) - Build #${{ github.run_number }}
+
+          - **Thiết bị**: POCO F4 (munch / SM8250-AC)
+          - **Thời gian**: ${RELEASE_DATE}
+          - **Nhánh Patches đã dùng**: \`${{ inputs.patch_branch }}\`
+          - **Root Variant đã chọn**: \`${{ inputs.root_mode }}\`
+          - **Target OS**: \`${{ inputs.target_os }}\`
+          - **SuSFS Quét được**: \`${{ env.SUSFS_VER }}\`
+
+          ---
+
+          ### 📦 Phân loại File Kernel đã tạo:
+          - Nếu chọn \`root\`: File zip có tiền tố \`KowSU_SuSFS_${{ env.SUSFS_VER }}\`
+          - Nếu chọn \`ksu_nosusfs\`: File zip có tiền tố \`KSU_NoSuSFS\` (Thuần KernelSU không SuSFS)
+          - Nếu chọn \`noroot\`: File zip có tiền tố \`NoRoot\` (Bản sạch hoàn toàn)
+
+          ---
+
+          ### 💡 Khuyến Nghị Cài Đặt Manager Tương Thích Với Kernel:
+
+          | Loại Kernel Đang Dùng | APK Khuyên Dùng Hàng Đầu (Nên Cài) | APK Dự Phòng / Thay Thế | APK Cần Tránh |
+          | :--- | :--- | :--- | :--- |
+          | **SuSFS (\`${{ env.SUSFS_VER }}\`)** | 🌟 **Action_ReSukiSU_*.apk** hoặc **Action_SukiSU_*.apk** | **BakaSU** / **KernelSU-Next** | ❌ **KernelSU Official (\`tiann\`)** (Không hỗ trợ menu cấu hình SuSFS) |
+          | **KSU NoSuSFS (\`ksu_nosusfs\`)** | 🌟 **KernelSU-Next** hoặc **ReSukiSU / BakaSU** | **KernelSU Official (\`tiann\`)**, **Rissu** | Không hạn chế |
+          | **NoRoot (\`noroot\`)** | *Không cần cài APK Manager* | - | - |
+
+          > 📌 **Chi tiết tính năng SuSFS**: ReSukiSU và SukiSU-Ultra tích hợp sẵn panel điều khiển SuSFS chuyên sâu (ẩn mount point, spoof uname, kstat hooks) giúp vượt qua các giải pháp phát hiện root cao cấp như Play Integrity Strong, Momo, VNeID, MB Bank.
+          EOF
+
+      - name: "🚀 Publish to GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "EXTREME_BMW_${{ github.run_number }}_$(date +'%Y%m%d_%H%M%S')"
+          name: "EXTREME++ BMW Edition #${{ github.run_number }} (${{ inputs.root_mode }})"
+          body_path: release_notes.md
+          files: |
+            kernel/EXTREME++*.zip
+            raw_images/*.zip
+            apk_output/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
