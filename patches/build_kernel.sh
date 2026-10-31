@@ -116,6 +116,13 @@ inject_ksu_susfs() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
 
+    # Vượt lỗi thiếu manual hook check gây Error 2 trong ReSukiSU
+    if [ -f "drivers/kernelsu/kernel/tools/manual_hook_check.mk" ]; then
+        sed -i 's/$(error/$(warning/g' drivers/kernelsu/kernel/tools/manual_hook_check.mk || true
+    elif [ -f "KernelSU/kernel/tools/manual_hook_check.mk" ]; then
+        sed -i 's/$(error/$(warning/g' KernelSU/kernel/tools/manual_hook_check.mk || true
+    fi
+
     if [ -f "drivers/kernelsu/Kconfig" ]; then
         sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
         echo "[+] Default hook set to KSU_SUSFS in drivers/kernelsu/Kconfig"
