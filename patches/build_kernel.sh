@@ -147,8 +147,9 @@ inject_ksu_driver() {
         echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
     else
         if [ -f "drivers/kernelsu/Kconfig" ]; then
-            sed -i 's/default KSU_SUSFS/default KSU_TRACEPOINT_HOOK/' drivers/kernelsu/Kconfig
-            echo "[+] Default hook set to KSU_TRACEPOINT_HOOK in drivers/kernelsu/Kconfig"
+            sed -i 's/default KSU_SUSFS/default KSU_MANUAL_HOOK/' drivers/kernelsu/Kconfig
+            sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_MANUAL_HOOK/' drivers/kernelsu/Kconfig
+            echo "[+] Default hook set to KSU_MANUAL_HOOK in drivers/kernelsu/Kconfig"
         fi
         sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
         echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
@@ -432,8 +433,8 @@ build_target_os() {
         scripts/config --file "${OUT_DIR}/.config" \
             -e KSU \
             -d KSU_SUSFS \
-            -e KSU_TRACEPOINT_HOOK \
-            -d KSU_MANUAL_HOOK \
+            -d KSU_TRACEPOINT_HOOK \
+            -e KSU_MANUAL_HOOK \
             -e KSU_MULTI_MANAGER_SUPPORT \
             -e THREAD_INFO_IN_TASK \
             -d KSU_SUSFS_SUS_PATH \
