@@ -3,6 +3,7 @@
 # EXTREME++ BMW Edition Kernel Build Script
 # Maintainer: PandeyJI-9
 # Device: POCO F4 (munch) | Targets: HyperOS 4 / HyperOS & AOSP (Android 13–17)
+# Root Variants: SuSFS (Dynamic) | KSU NoSuSFS | Pure Clean (NoRoot)
 # ==============================================================================
 
 set -e
@@ -10,7 +11,7 @@ trap 'echo "❌ [ERROR] Script failed on line $LINENO"; exit 1' ERR
 
 if [ -z "$1" ]; then
     echo "[!] Error: No device specified."
-    echo "Usage: $0 <device_name> [root|noroot|both] [hyperos|aosp|both]"
+    echo "Usage: $0 <device_name> [root|ksu_nosusfs|noroot|both|all] [hyperos|aosp|both]"
     exit 1
 fi
 
@@ -20,14 +21,20 @@ DEFCONFIG="${DEVICE_NAME}_defconfig"
 ROOT_MODE="${2:-root}"
 ROOT_MODE=$(echo "$ROOT_MODE" | tr '[:upper:]' '[:lower:]')
 case "$ROOT_MODE" in
-    ksu|root|true|1)
+    ksu|root|true|1|susfs|ksu_susfs)
         ROOT_MODE="root"
+        ;;
+    ksu_nosusfs|nosusfs|ksu-nosusfs)
+        ROOT_MODE="ksu_nosusfs"
         ;;
     noroot|clean|false|0)
         ROOT_MODE="noroot"
         ;;
     both)
         ROOT_MODE="both"
+        ;;
+    all)
+        ROOT_MODE="all"
         ;;
     *)
         ROOT_MODE="root"
@@ -41,6 +48,9 @@ case "$TARGET_OS" in
     aosp) TARGET_OS="aosp" ;;
     *) TARGET_OS="both" ;;
 esac
+
+# SuSFS Version detection or fallback
+SUSFS_VER="${SUSFS_VERSION:-v2.3.0}"
 
 KERNEL_DIR="$(pwd)"
 TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
@@ -58,7 +68,7 @@ TOTAL_CORES=$(nproc --all)
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 EXTREME++ BMW Edition Build Engine Initiated!"
 echo "   Device: POCO F4 (munch / SM8250-AC)"
-echo "   Root Mode: ${ROOT_MODE}"
+echo "   Root Mode: ${ROOT_MODE} (SuSFS Ref: ${SUSFS_VER})"
 echo "   Target Mode: ${TARGET_OS}"
 echo "   System Cores: ${TOTAL_CORES} (Running at Full Speed)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -108,19 +118,44 @@ if ! grep -q "selinux,baseband_guard" security/Kconfig; then
 fi
 
 # ------------------------------------------
-# 3. KernelSU (RKSU / ReSukiSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup Function
+# 3. KernelSU Source Setup & Universal Manager Patch
 # ------------------------------------------
-inject_ksu_susfs() {
+inject_ksu_driver() {
+    local WITH_SUSFS="$1"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "⚡ Injecting ReSukiSU / KowSU Multi-Manager & SuSFS v2.3.0 Source..."
+    if [ "$WITH_SUSFS" = "susfs" ]; then
+        echo "⚡ Injecting ReSukiSU / KowSU Multi-Manager & SuSFS ${SUSFS_VER} Source..."
+    else
+        echo "⚡ Injecting KernelSU / ReSukiSU Driver (NO SuSFS)..."
+    fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
 
-    if [ -f "drivers/kernelsu/Kconfig" ]; then
-        sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
-        echo "[+] Default hook set to KSU_SUSFS in drivers/kernelsu/Kconfig"
+    if [ ! -d "drivers/kernelsu" ]; then
+        curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
     fi
 
+    if [ "$WITH_SUSFS" = "susfs" ]; then
+        if [ -f "drivers/kernelsu/Kconfig" ]; then
+            sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
+            echo "[+] Default hook set to KSU_SUSFS in drivers/kernelsu/Kconfig"
+        fi
+        sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
+        echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
+        echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
+        echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
+        echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
+    else
+        if [ -f "drivers/kernelsu/Kconfig" ]; then
+            sed -i 's/default KSU_SUSFS/default KSU_TRACEPOINT_HOOK/' drivers/kernelsu/Kconfig
+            echo "[+] Default hook set to KSU_TRACEPOINT_HOOK in drivers/kernelsu/Kconfig"
+        fi
+        sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
+        echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
+        echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
+        echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
+    fi
+
+    # Universal APK verification hook
     python3 -c '
 import os
 
@@ -146,7 +181,7 @@ if apk_sign_path:
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
             !strcmp(pkg_buf, "com.resukisu")) {
-            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
+            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\n", pkg_buf);
             *signature_index = 0;
             return true;
         }
@@ -160,12 +195,6 @@ if apk_sign_path:
     else:
         print("ℹ️ " + apk_sign_path + " already patched or target signature pattern handled")
 ' 2>/dev/null || true
-
-    echo "CONFIG_KSU=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "[+] RKSU / ReSukiSU Multi-Manager Non-GKI setup finished."
 }
 
 # ------------------------------------------
@@ -204,28 +233,30 @@ with open(path_kconfig, "r") as f:
     text = f.read()
 
 gov_choice = """config CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
-\tbool "extreme+"
-\tdepends on SMP
-\tselect CPU_FREQ_GOV_EXTREME_PLUS
-\tselect CPU_FREQ_GOV_PERFORMANCE
-\thelp
-\t  Use the "extreme+" CPUFreq governor by default. Zero latency,
-\t  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
+	bool "extreme+"
+	depends on SMP
+	select CPU_FREQ_GOV_EXTREME_PLUS
+	select CPU_FREQ_GOV_PERFORMANCE
+	help
+	  Use the "extreme+" CPUFreq governor by default. Zero latency,
+	  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
 """
 
 gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
-\tbool "\x27extreme+\x27 cpufreq policy governor"
-\tdepends on CPU_FREQ && SMP
-\tselect CPU_FREQ_GOV_ATTR_SET
-\tselect IRQ_WORK
-\thelp
-\t  EXTREME+ governor based on scheduler utilization with active task
-\t  frame pacing floor, zero latency up-scaling, and 60ms decay window.
+	bool "'extreme+' cpufreq policy governor"
+	depends on CPU_FREQ && SMP
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  EXTREME+ governor based on scheduler utilization with active task
+	  frame pacing floor, zero latency up-scaling, and 60ms decay window.
 """
 
 if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
-    text = text.replace("config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL", gov_choice + "\nconfig CPU_FREQ_DEFAULT_GOV_SCHEDUTIL")
-    text = text.replace("config CPU_FREQ_GOV_SCHEDUTIL", gov_def + "\nconfig CPU_FREQ_GOV_SCHEDUTIL")
+    text = text.replace("config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL", gov_choice + "
+config CPU_FREQ_DEFAULT_GOV_SCHEDUTIL")
+    text = text.replace("config CPU_FREQ_GOV_SCHEDUTIL", gov_def + "
+config CPU_FREQ_GOV_SCHEDUTIL")
     with open(path_kconfig, "w") as f:
         f.write(text)
     print("✅ Injected EXTREME+ governor definitions into drivers/cpufreq/Kconfig")
@@ -292,9 +323,15 @@ rm -rf anykernel_template/.git
 # ==============================================================================
 build_target_os() {
     local OS="$1"
-    local ENABLE_KSU="${2:-0}"
+    local ROOT_TYPE="$2" # "susfs", "ksu_nosusfs", or "noroot"
     local OS_UPPER=$(echo "$OS" | tr '[:lower:]' '[:upper:]')
-    local ROOT_LABEL=$([ "$ENABLE_KSU" -eq 1 ] && echo "KowSU + SuSFS v2.3.0" || echo "Pure Clean Base")
+    local ROOT_LABEL="Pure Clean Base (No Root)"
+    if [ "$ROOT_TYPE" = "susfs" ]; then
+        ROOT_LABEL="KowSU + SuSFS ${SUSFS_VER}"
+    elif [ "$ROOT_TYPE" = "ksu_nosusfs" ]; then
+        ROOT_LABEL="KernelSU Multi-Manager (No SuSFS)"
+    fi
+
     local OUT_DIR="${KERNEL_DIR}/out_${OS}"
     local MAKE_OPTS=(
         O="${OUT_DIR}"
@@ -323,82 +360,27 @@ build_target_os() {
     scripts/config --file "${OUT_DIR}/.config" -e BBG
 
     # 2. Adreno TrustZone GPU Devfreq Governor & Bus Monitor
-    scripts/config --file "${OUT_DIR}/.config" \
-        -e PM_DEVFREQ \
-        -e DEVFREQ_GOV_SIMPLE_ONDEMAND \
-        -e DEVFREQ_GOV_PERFORMANCE \
-        -e DEVFREQ_GOV_POWERSAVE \
-        -e DEVFREQ_GOV_USERSPACE \
-        -e DEVFREQ_GOV_PASSIVE \
-        -e DEVFREQ_GOV_QCOM_ADRENO_TZ \
-        -e DEVFREQ_GOV_QCOM_GPUBW_MON \
-        -e QCOM_KGSL \
-        -e QCOM_KGSL_IOMMU \
-        --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
+    scripts/config --file "${OUT_DIR}/.config"         -e PM_DEVFREQ         -e DEVFREQ_GOV_SIMPLE_ONDEMAND         -e DEVFREQ_GOV_PERFORMANCE         -e DEVFREQ_GOV_POWERSAVE         -e DEVFREQ_GOV_USERSPACE         -e DEVFREQ_GOV_PASSIVE         -e DEVFREQ_GOV_QCOM_ADRENO_TZ         -e DEVFREQ_GOV_QCOM_GPUBW_MON         -e QCOM_KGSL         -e QCOM_KGSL_IOMMU         --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
 
     # 3. ZRAM ZSTD Zero-Stutter Memory Compression
-    scripts/config --file "${OUT_DIR}/.config" \
-        -e ZRAM \
-        -e CRYPTO_ZSTD \
-        -e ZSTD_COMPRESS \
-        -e ZSTD_DECOMPRESS \
-        -e ZRAM_DEF_COMP_ZSTD \
-        -d ZRAM_DEF_COMP_LZ4 \
-        --set-str ZRAM_DEF_COMP "zstd"
+    scripts/config --file "${OUT_DIR}/.config"         -e ZRAM         -e CRYPTO_ZSTD         -e ZSTD_COMPRESS         -e ZSTD_DECOMPRESS         -e ZRAM_DEF_COMP_ZSTD         -d ZRAM_DEF_COMP_LZ4         --set-str ZRAM_DEF_COMP "zstd"
 
     # 4. Ultra-Fast & Safe Boot (Zero-Latency EXTREME+ Governor)
-    scripts/config --file "${OUT_DIR}/.config" \
-        -e CPU_FREQ_GOV_SCHEDUTIL \
-        -e CPU_FREQ_GOV_EXTREME_PLUS \
-        -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
-        -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
-        --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
+    scripts/config --file "${OUT_DIR}/.config"         -e CPU_FREQ_GOV_SCHEDUTIL         -e CPU_FREQ_GOV_EXTREME_PLUS         -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS         -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL         --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
 
     # 5. TCP BBR Congestion Control & Lightweight Gaming Tunables
-    scripts/config --file "${OUT_DIR}/.config" \
-        -e TCP_CONG_BBR \
-        -e DEFAULT_BBR \
-        --set-str DEFAULT_TCP_CONG "bbr" \
-        -e NET_SCH_FQ \
-        -e NET_SCH_FQ_CODEL \
-        -d TASK_IO_ACCOUNTING \
-        -d BLK_DEV_IO_TRACE \
-        -d SCHEDSTATS \
-        -d PROVE_LOCKING \
-        -d LOCKDEP \
-        -d LOCK_STAT \
-        -d DEBUG_KMEMLEAK \
-        -d DEBUG_PREEMPT
+    scripts/config --file "${OUT_DIR}/.config"         -e TCP_CONG_BBR         -e DEFAULT_BBR         --set-str DEFAULT_TCP_CONG "bbr"         -e NET_SCH_FQ         -e NET_SCH_FQ_CODEL         -d TASK_IO_ACCOUNTING         -d BLK_DEV_IO_TRACE         -d SCHEDSTATS         -d PROVE_LOCKING         -d LOCKDEP         -d LOCK_STAT         -d DEBUG_KMEMLEAK         -d DEBUG_PREEMPT
 
-    # 6. Root Configuration (KowSU / ReSukiSU + SuSFS v2.3.0 vs Pure Clean Base)
-    if [ "$ENABLE_KSU" -eq 1 ]; then
-        echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
-        scripts/config --file "${OUT_DIR}/.config" \
-            -e KSU \
-            -e KSU_SUSFS \
-            -d KSU_TRACEPOINT_HOOK \
-            -d KSU_MANUAL_HOOK \
-            -e KSU_MULTI_MANAGER_SUPPORT \
-            -e THREAD_INFO_IN_TASK \
-            -e KSU_SUSFS_SUS_PATH \
-            -e KSU_SUSFS_SUS_MOUNT \
-            -e KSU_SUSFS_SUS_KSTAT \
-            -e KSU_SUSFS_SPOOF_UNAME \
-            -e KSU_SUSFS_ENABLE_LOG \
-            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            -e KSU_SUSFS_OPEN_REDIRECT \
-            -e KSU_SUSFS_SUS_MAP \
-            -d KSU_DISABLE_MANAGER \
-            -d KSU_DISABLE_POLICY
+    # 6. Root Configuration Handling
+    if [ "$ROOT_TYPE" = "susfs" ]; then
+        echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS ${SUSFS_VER} Configuration into ${OS_UPPER} .config..."
+        scripts/config --file "${OUT_DIR}/.config"             -e KSU             -e KSU_SUSFS             -d KSU_TRACEPOINT_HOOK             -d KSU_MANUAL_HOOK             -e KSU_MULTI_MANAGER_SUPPORT             -e THREAD_INFO_IN_TASK             -e KSU_SUSFS_SUS_PATH             -e KSU_SUSFS_SUS_MOUNT             -e KSU_SUSFS_SUS_KSTAT             -e KSU_SUSFS_SPOOF_UNAME             -e KSU_SUSFS_ENABLE_LOG             -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS             -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG             -e KSU_SUSFS_OPEN_REDIRECT             -e KSU_SUSFS_SUS_MAP             -d KSU_DISABLE_MANAGER             -d KSU_DISABLE_POLICY
+    elif [ "$ROOT_TYPE" = "ksu_nosusfs" ]; then
+        echo "[*] Injecting KernelSU (NO SuSFS) Configuration into ${OS_UPPER} .config..."
+        scripts/config --file "${OUT_DIR}/.config"             -e KSU             -d KSU_SUSFS             -e KSU_TRACEPOINT_HOOK             -d KSU_MANUAL_HOOK             -e KSU_MULTI_MANAGER_SUPPORT             -e THREAD_INFO_IN_TASK             -d KSU_SUSFS_SUS_PATH             -d KSU_SUSFS_SUS_MOUNT             -d KSU_SUSFS_SUS_KSTAT             -d KSU_SUSFS_SPOOF_UNAME             -d KSU_SUSFS_ENABLE_LOG             -d KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS             -d KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG             -d KSU_SUSFS_OPEN_REDIRECT             -d KSU_SUSFS_SUS_MAP             -d KSU_DISABLE_MANAGER             -d KSU_DISABLE_POLICY
     else
         echo "[*] Disabling embedded KSU for Pure Clean Kernel (${OS_UPPER})..."
-        scripts/config --file "${OUT_DIR}/.config" \
-            -d KSU \
-            -d KSU_SUSFS \
-            -d KSU_TRACEPOINT_HOOK \
-            -d KSU_MANUAL_HOOK \
-            -d KSU_MULTI_MANAGER_SUPPORT
+        scripts/config --file "${OUT_DIR}/.config"             -d KSU             -d KSU_SUSFS             -d KSU_TRACEPOINT_HOOK             -d KSU_MANUAL_HOOK             -d KSU_MULTI_MANAGER_SUPPORT
         sed -i '/CONFIG_KSU/d' "${OUT_DIR}/.config" 2>/dev/null || true
     fi
 
@@ -415,40 +397,7 @@ build_target_os() {
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_HyperOS"
         OS_BADGE="HyperOS 4 / HyperOS (Android 13–17)"
 
-        scripts/config --file "${OUT_DIR}/.config" \
-            --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
-            -e PERF_CRITICAL_RT_TASK \
-            -e SF_BINDER \
-            -e OVERLAY_FS \
-            -e MIGT \
-            -e MIGT_ENERGY_MODEL \
-            -e MIHW \
-            -e PACKAGE_RUNTIME_INFO \
-            -e BINDER_OPT \
-            -e KPERFEVENTS \
-            -e PERF_HUMANTASK \
-            -d LTO_CLANG \
-            -e LTO_NONE \
-            -d SHADOW_CALL_STACK \
-            -e XIAOMI_MIUI \
-            -d MI_MEMORY_SYSFS \
-            -e TASK_DELAY_ACCT \
-            -e MIUI_ZRAM_MEMORY_TRACKING \
-            -e PERF_HELPER \
-            -e BOOTUP_RECLAIM \
-            -e MI_RECLAIM \
-            -e RTMM \
-            -e MILLET_CGROUP \
-            -e MILLET_SIG \
-            -e MILLET_BINDER \
-            -e MILLET_PKG \
-            -e MILLET_BINDER_GKI \
-            -e MILLET_CORE \
-            -e MILLET_HS \
-            -e BINDER_PRIO \
-            -d REKERNEL \
-            -d REKERNEL_NETWORK \
-            -d LTO_CLANG_THIN -d CFI_CLANG
+        scripts/config --file "${OUT_DIR}/.config"             --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd             -e PERF_CRITICAL_RT_TASK             -e SF_BINDER             -e OVERLAY_FS             -e MIGT             -e MIGT_ENERGY_MODEL             -e MIHW             -e PACKAGE_RUNTIME_INFO             -e BINDER_OPT             -e KPERFEVENTS             -e PERF_HUMANTASK             -d LTO_CLANG             -e LTO_NONE             -d SHADOW_CALL_STACK             -e XIAOMI_MIUI             -d MI_MEMORY_SYSFS             -e TASK_DELAY_ACCT             -e MIUI_ZRAM_MEMORY_TRACKING             -e PERF_HELPER             -e BOOTUP_RECLAIM             -e MI_RECLAIM             -e RTMM             -e MILLET_CGROUP             -e MILLET_SIG             -e MILLET_BINDER             -e MILLET_PKG             -e MILLET_BINDER_GKI             -e MILLET_CORE             -e MILLET_HS             -e BINDER_PRIO             -d REKERNEL             -d REKERNEL_NETWORK             -d LTO_CLANG_THIN -d CFI_CLANG
     else
         echo "[*] Injecting Clean AOSP Subsystems (Android 16 & 17 Tested & Verified)..."
         LOCALVER="-Extreme++Gaming-AOSP-BMW"
@@ -456,38 +405,7 @@ build_target_os() {
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_AOSP"
         OS_BADGE="AOSP Custom ROMs (Android 13–17 / A16 & A17 Tested)"
 
-        scripts/config --file "${OUT_DIR}/.config" \
-            --set-str STATIC_USERMODEHELPER_PATH "" \
-            -d XIAOMI_MIUI \
-            -d MIGT \
-            -d MIGT_ENERGY_MODEL \
-            -d MIHW \
-            -d SF_BINDER \
-            -d RTMM \
-            -d BOOTUP_RECLAIM \
-            -d MI_RECLAIM \
-            -d PERF_HELPER \
-            -d PERF_HUMANTASK \
-            -d PERF_CRITICAL_RT_TASK \
-            -d MILLET_CGROUP \
-            -d MILLET_SIG \
-            -d MILLET_BINDER \
-            -d MILLET_PKG \
-            -d MILLET_BINDER_GKI \
-            -d MILLET_CORE \
-            -d MILLET_HS \
-            -d BINDER_PRIO \
-            -d PACKAGE_RUNTIME_INFO \
-            -d BINDER_OPT \
-            -d MIUI_ZRAM_MEMORY_TRACKING \
-            -d MI_MEMORY_SYSFS \
-            -e OVERLAY_FS \
-            -e REKERNEL \
-            -e REKERNEL_NETWORK \
-            -d LTO_CLANG \
-            -e LTO_NONE \
-            -d SHADOW_CALL_STACK \
-            -d LTO_CLANG_THIN -d CFI_CLANG
+        scripts/config --file "${OUT_DIR}/.config"             --set-str STATIC_USERMODEHELPER_PATH ""             -d XIAOMI_MIUI             -d MIGT             -d MIGT_ENERGY_MODEL             -d MIHW             -d SF_BINDER             -d RTMM             -d BOOTUP_RECLAIM             -d MI_RECLAIM             -d PERF_HELPER             -d PERF_HUMANTASK             -d PERF_CRITICAL_RT_TASK             -d MILLET_CGROUP             -d MILLET_SIG             -d MILLET_BINDER             -d MILLET_PKG             -d MILLET_BINDER_GKI             -d MILLET_CORE             -d MILLET_HS             -d BINDER_PRIO             -d PACKAGE_RUNTIME_INFO             -d BINDER_OPT             -d MIUI_ZRAM_MEMORY_TRACKING             -d MI_MEMORY_SYSFS             -e OVERLAY_FS             -e REKERNEL             -e REKERNEL_NETWORK             -d LTO_CLANG             -e LTO_NONE             -d SHADOW_CALL_STACK             -d LTO_CLANG_THIN -d CFI_CLANG
     fi
 
     scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "${LOCALVER}"
@@ -551,9 +469,9 @@ ui_print " ";
 ui_print " ══════════════════════════════════════════════";
 ui_print "   ______      __                              ";
 ui_print "  / ____/  __ / /_ _____ ___   ____ ___ ___    ";
-ui_print " / __/ | |/_// __// ___// _ \\ / __ '__// _ \\   ";
+ui_print " / __/ | |/_// __// ___// _ \ / __ '__// _ \   ";
 ui_print "/ /___ _>  < / /_ / /   /  __// / / / /  __/   ";
-ui_print "\\____//_/|_| \\__//_/    \\___//_/ /_/ / \\___/   ";
+ui_print "\____//_/|_| \__//_/    \___//_/ /_/ / \___/   ";
 ui_print "                 [ + + ]                       ";
 ui_print " ══════════════════════════════════════════════";
 ui_print "  🏎️  EDITION : BMW Gaming Edition (${OS_UPPER}) ";
@@ -561,7 +479,7 @@ ui_print "  👑  AUTHOR  : Extreme++ by @pandey_ji_8      ";
 ui_print "  📱  DEVICE  : POCO F4 (munch) | ${OS_UPPER}  ";
 ui_print "  ⚡  CLOCK   : 3.19 GHz Unlocked Monster Peak ";
 ui_print "  🚀  PROFILES: In-Kernel Dynamic Switcher     ";
-ui_print "  🛡️  ROOT    : $([ "$ENABLE_KSU" -eq 1 ] && echo 'KowSU + SuSFS v2.3.0' || echo 'Pure Clean Base (No Root)') ";
+ui_print "  🛡️  ROOT    : ${ROOT_LABEL} ";
 ui_print " ══════════════════════════════════════════════";
 ui_print " ";
 
@@ -582,7 +500,7 @@ dump_boot;
 ui_print "  [2/4] 🏎️ Writing FakeDreamer Adreno 650 Undervolted DTB...";
 write_boot;
 
-# Clean conflicting legacy service.d scripts from /data/adb (Fixes Poco logo freeze & bootloops)
+# Clean conflicting legacy service.d scripts from /data/adb
 ui_print "  [3/4] 🛡️ Checking Storage & Subsystems...";
 mount /data 2>/dev/null
 if [ -d /data/adb ]; then
@@ -600,11 +518,13 @@ ui_print " ═══════════════════════
 ui_print " ";
 EOF
 
-    # Package into flashable ZIP
+    # Package into flashable ZIP with dynamic naming
     local DATE_TAG="$(date +'%d%b%Y_%H%M')"
     local ZIP_NAME
-    if [ "$ENABLE_KSU" -eq 1 ]; then
-        ZIP_NAME="${ZIP_BASE}_KowSU_${DATE_TAG}.zip"
+    if [ "$ROOT_TYPE" = "susfs" ]; then
+        ZIP_NAME="${ZIP_BASE}_KowSU_SuSFS_${SUSFS_VER}_${DATE_TAG}.zip"
+    elif [ "$ROOT_TYPE" = "ksu_nosusfs" ]; then
+        ZIP_NAME="${ZIP_BASE}_KSU_NoSuSFS_${DATE_TAG}.zip"
     else
         ZIP_NAME="${ZIP_BASE}_NoRoot_${DATE_TAG}.zip"
     fi
@@ -622,48 +542,46 @@ EOF
 # ==============================================================================
 # EXECUTE REQUESTED TARGET BUILDS
 # ==============================================================================
+run_build_cycle() {
+    local VARIANT="$1"
+    if [ "$VARIANT" = "susfs" ]; then
+        inject_ksu_driver "susfs"
+    elif [ "$VARIANT" = "ksu_nosusfs" ]; then
+        inject_ksu_driver "nosusfs"
+    else
+        sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
+    fi
+
+    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
+        build_target_os "hyperos" "$VARIANT"
+    fi
+    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
+        build_target_os "aosp" "$VARIANT"
+    fi
+}
+
 if [ "$ROOT_MODE" == "noroot" ]; then
     echo "[*] Executing Pure Clean Non-Root Build..."
-    sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 0
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 0
-    fi
+    run_build_cycle "noroot"
+elif [ "$ROOT_MODE" == "ksu_nosusfs" ]; then
+    echo "[*] Executing KernelSU (NO SuSFS) Build..."
+    run_build_cycle "ksu_nosusfs"
 elif [ "$ROOT_MODE" == "root" ]; then
-    echo "[*] Executing KowSU + SuSFS v2.3.0 Root Build..."
-    inject_ksu_susfs
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 1
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 1
-    fi
+    echo "[*] Executing KowSU + SuSFS ${SUSFS_VER} Root Build..."
+    run_build_cycle "susfs"
 elif [ "$ROOT_MODE" == "both" ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 DUAL BUILD REQUESTED: Compiling BOTH Non-Root & Root Variants!"
+    echo "🚀 DUAL BUILD REQUESTED: Compiling Non-Root & SuSFS Variants!"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    echo ""
-    echo "[*] Phase 1/2: Compiling Pure Clean Non-Root Variant(s)..."
-    sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 0
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 0
-    fi
-
-    echo ""
-    echo "[*] Phase 2/2: Compiling Root (KowSU + SuSFS v2.3.0) Variant(s)..."
-    inject_ksu_susfs
-    if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "hyperos" 1
-    fi
-    if [ "$TARGET_OS" == "aosp" ] || [ "$TARGET_OS" == "both" ]; then
-        build_target_os "aosp" 1
-    fi
+    run_build_cycle "noroot"
+    run_build_cycle "susfs"
+elif [ "$ROOT_MODE" == "all" ]; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🚀 TRIPLE BUILD REQUESTED: Compiling ALL Root Variants!"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    run_build_cycle "noroot"
+    run_build_cycle "ksu_nosusfs"
+    run_build_cycle "susfs"
 fi
 
 echo ""
