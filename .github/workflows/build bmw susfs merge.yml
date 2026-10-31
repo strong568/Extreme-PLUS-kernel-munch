@@ -1,0 +1,374 @@
+name: "🚀 Build bmw susfs nosusfs merge EXTREME++ Kernel & Single Release (Parallel)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      patches_branch:
+        description: 'Branch chứa thư mục patches (Mặc định: bmw_ResukiSU_Susfs_noSusfs | Gợi ý: main cũng chạy tốt)'
+        required: true
+        type: string
+        default: 'bmw_ResukiSU_Susfs_noSusfs'
+      root_mode:
+        description: 'Root Variant: ksu_susfs (SuSFS) | ksu_no_susfs (Standard KSU) | noroot (Pure Clean) | all | both'
+        required: true
+        type: choice
+        default: 'ksu_susfs'
+        options:
+          - 'ksu_susfs'
+          - 'ksu_no_susfs'
+          - 'noroot'
+          - 'all'
+          - 'both'
+      target_os:
+        description: 'Target OS: both | hyperos | aosp'
+        required: true
+        type: choice
+        default: 'both'
+        options:
+          - 'both'
+          - 'hyperos'
+          - 'aosp'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  # ============================================================================
+  # JOB 1: BIÊN DỊCH KERNEL (CHẠY SONG SONG)
+  # ============================================================================
+  build_kernel:
+    name: "🔨 Compile EXTREME++ Kernel"
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: "📦 Checkout config & patches repo"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.patches_branch || 'bmw_ResukiSU_Susfs_noSusfs' }}
+
+      - name: "🛠️ Install build dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip jq
+
+      - name: "⚡ Setup ZyC-Clang 16"
+        run: |
+          mkdir -p $HOME/zyc-clang
+          curl -L "https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260807-release/Clang-16.0.6-20260807.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C $HOME/zyc-clang
+          rm clang.tar.gz
+
+      - name: "🌐 Clone kernel source"
+        run: |
+          git clone --depth=1 -b android17-aptusitu https://github.com/AstideLabs/android_kernel_xiaomi_sm8250 kernel
+
+      - name: "⚙️ Inject Build Script & Configure SuSFS Version Naming"
+        run: |
+          PATCH_BRANCH="${{ inputs.patches_branch || 'bmw_ResukiSU_Susfs_noSusfs' }}"
+          cp patches/* kernel/
+          chmod +x kernel/build_kernel.sh
+
+          SUSFS_VER=$(grep -rhPo '#define\s+SUSFS_VERSION\s+"\K[^"]+' kernel/include/linux/susfs*.h 2>/dev/null | head -n 1 || true)
+          if [ -z "$SUSFS_VER" ]; then
+            SUSFS_VER=$(grep -oP 'SuSFS \Kv[0-9]+\.[0-9]+\.[0-9]+' kernel/build_kernel.sh | head -n 1 || echo "v2.3.0")
+          fi
+
+          sed -i "s/ZIP_SUFFIX=\"KowSU_SuSFS\"/ZIP_SUFFIX=\"KowSU_SuSFS_${SUSFS_VER}\"/g" kernel/build_kernel.sh
+
+          if [[ "${{ inputs.root_mode }}" == "ksu_susfs" || "${{ inputs.root_mode }}" == "both" || "${{ inputs.root_mode }}" == "all" ]]; then
+            VARIANT_TAG="${{ inputs.root_mode }}_SuSFS_${SUSFS_VER}"
+          else
+            VARIANT_TAG="${{ inputs.root_mode }}"
+          fi
+
+          echo "VARIANT_TAG=$VARIANT_TAG" >> $GITHUB_ENV
+          echo "SUSFS_VER=$SUSFS_VER" >> $GITHUB_ENV
+          echo "PATCH_BRANCH=$PATCH_BRANCH" >> $GITHUB_ENV
+
+      - name: "💾 Allocate 10GB Swap Memory"
+        run: |
+          sudo fallocate -l 10G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+
+      - name: "🔨 Compile EXTREME++ Kernel"
+        run: |
+          cd kernel
+          ./build_kernel.sh munch "${{ inputs.root_mode }}" "${{ inputs.target_os }}"
+
+          for f in EXTREME++*.zip; do
+            [ -e "$f" ] || continue
+            if [[ "$f" == *"SuSFS"* ]] && [[ "$f" != *"NoSuSFS"* ]] && [[ "$f" != *"${SUSFS_VER}"* ]]; then
+              NEW_NAME="${f/SuSFS/SuSFS_${SUSFS_VER}}"
+              mv "$f" "$NEW_NAME"
+            fi
+          done
+
+      - name: "📦 Package Raw Kernel Images for HyperOS 4"
+        if: success()
+        run: |
+          IMG_DIR="$GITHUB_WORKSPACE/raw_kernel_images_staging"
+          OUT_ZIP_DIR="$GITHUB_WORKSPACE/raw_images"
+          mkdir -p "$IMG_DIR" "$OUT_ZIP_DIR"
+
+          HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out_hyperos/arch/arm64/boot"
+          if [ ! -d "$HYPEROS_BOOT" ]; then
+            HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot"
+          fi
+
+          if [ -d "$HYPEROS_BOOT" ] && [ -f "$HYPEROS_BOOT/Image" ]; then
+            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/Image"
+            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/kernel.img"
+            [ -f "$HYPEROS_BOOT/dtbo.img" ] && cp -f "$HYPEROS_BOOT/dtbo.img" "$IMG_DIR/dtbo.img"
+            if [ -f "$HYPEROS_BOOT/dtb" ]; then
+              cp -f "$HYPEROS_BOOT/dtb" "$IMG_DIR/dtb"
+              cp -f "$HYPEROS_BOOT/dtb" "$IMG_DIR/dtb.img"
+            elif [ -f "$HYPEROS_BOOT/dtb.img" ]; then
+              cp -f "$HYPEROS_BOOT/dtb.img" "$IMG_DIR/dtb.img"
+              cp -f "$HYPEROS_BOOT/dtb.img" "$IMG_DIR/dtb"
+            fi
+            find "$HYPEROS_BOOT" -maxdepth 1 -name "*.img" -exec cp -f {} "$IMG_DIR/" \; 2>/dev/null || true
+
+            RAW_ZIP_NAME="EXTREME++_HyperOS4_Raw_Images_${{ env.VARIANT_TAG }}_Build_${{ github.run_number }}.zip"
+            (
+              cd "$IMG_DIR"
+              zip -9 -r "$OUT_ZIP_DIR/$RAW_ZIP_NAME" ./*
+            )
+            rm -rf "$IMG_DIR"
+          fi
+
+      - name: "📦 Upload Kernel Build Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel_release_assets
+          path: |
+            kernel/EXTREME++*.zip
+            raw_images/*.zip
+          if-no-files-found: warn
+
+  # ============================================================================
+  # JOB 2: TẢI SONG SONG TẤT CẢ APK KSU MANAGER (CHẠY SONG SONG VỚI JOB 1)
+  # ============================================================================
+  fetch_ksu_managers:
+    name: "📲 Fetch All KSU Manager APKs (Parallel)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🔍 Fetch All Manager APKs in Parallel"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p apk_output
+
+          REPOS=(
+            "rsuntk/KernelSU"
+            "tiann/KernelSU"
+            "Baka-SU/BakaSU"
+            "SukiSU-Ultra/SukiSU-Ultra"
+            "backslashxx/KernelSU"
+            "KernelSU-Next/KernelSU-Next"
+            "midori01/KernelSU"
+            "LyraVoid/FinaSU"
+          )
+
+          fetch_release_repo() {
+            local repo="$1"
+            local OWNER="${repo%%/*}"
+            local API_URL="https://api.github.com/repos/${repo}/releases"
+            local DATA
+            DATA=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
+
+            if [[ "$repo" == "Baka-SU/BakaSU" ]]; then
+              local BAKA_REL_URL BAKA_REL_NAME RESUKI_REL_URL RESUKI_REL_NAME
+              BAKA_REL_URL=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty')
+              BAKA_REL_NAME=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("bakasu.*\\.apk$"; "i")) ] | first | .name // empty')
+              RESUKI_REL_URL=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .browser_download_url // empty')
+              RESUKI_REL_NAME=$(echo "$DATA" | jq -r '[ .[].assets[]? | select(.name | test("resuki.*\\.apk$|ksu.*\\.apk$"; "i")) ] | first | .name // empty')
+
+              if [ -n "$BAKA_REL_URL" ]; then
+                curl -fLSs -o "apk_output/Release_BakaSU_${BAKA_REL_NAME}" "$BAKA_REL_URL"
+              fi
+              if [ -n "$RESUKI_REL_URL" ]; then
+                curl -fLSs -o "apk_output/Release_ReSukiSU_${RESUKI_REL_NAME}" "$RESUKI_REL_URL"
+              fi
+              return 0
+            fi
+
+            local ASSET_INFO APK_URL RAW_FILE_NAME VERSION_TAG FILE_NAME
+            ASSET_INFO=$(echo "$DATA" | jq -r '
+              [ .[] | {
+                  tag: .tag_name,
+                  asset: (
+                    (.assets[]? | select(.name | test("arm64-v8a.*\\.apk$"; "i"))) //
+                    (.assets[]? | select(.name | test("universal.*\\.apk$"; "i"))) //
+                    (.assets[]? | select(.name | test("\\.apk$"; "i")))
+                  )
+                }
+              ] | map(select(.asset != null)) | first // empty
+            ')
+
+            APK_URL=$(echo "$ASSET_INFO" | jq -r '.asset.browser_download_url // empty')
+            RAW_FILE_NAME=$(echo "$ASSET_INFO" | jq -r '.asset.name // empty')
+            VERSION_TAG=$(echo "$ASSET_INFO" | jq -r '.tag // empty')
+
+            if [ -n "$APK_URL" ]; then
+              if [[ "$repo" == "SukiSU-Ultra/SukiSU-Ultra" ]]; then
+                FILE_NAME="Release_SukiSU_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "KernelSU-Next/KernelSU-Next" ]]; then
+                FILE_NAME="KernelSU_Next_Manager_${VERSION_TAG}.apk"
+              elif [[ "$repo" == "midori01/KernelSU" ]]; then
+                FILE_NAME="Release_midori01_${RAW_FILE_NAME}"
+              elif [[ "$repo" == "LyraVoid/FinaSU" ]]; then
+                FILE_NAME="Release_FinaSU_${RAW_FILE_NAME}"
+              else
+                FILE_NAME="${OWNER}_Manager_${VERSION_TAG}.apk"
+              fi
+
+              curl -fLSs -o "apk_output/$FILE_NAME" "$APK_URL" || wget -q -O "apk_output/$FILE_NAME" "$APK_URL"
+            fi
+          }
+
+          fetch_bakasu_all_actions() {
+            local BAKA_RUNS_JSON
+            BAKA_RUNS_JSON=$(curl -sL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
+
+            local BAKASU_PR_RUN_ID RESUKISU_RUN_ID BAKASU_MAIN_RUN_ID
+            BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.event == "pull_request") or (.head_branch | test("pr|pull"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+            RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.head_branch | test("resuki"; "i")) or (.name | test("resuki"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+            BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select((.event != "pull_request") and (.head_branch | test("main|master"; "i")) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+
+            fetch_single_baka_run() {
+              local R_ID="$1"
+              local PREFIX="$2"
+              [ -z "$R_ID" ] && return 0
+
+              local ART_JSON
+              ART_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${R_ID}/artifacts")
+
+              echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk"; "i"))' | while read -r art; do
+                local ART_NAME ART_URL TMP_ZIP TMP_DIR CHOSEN_APK
+                ART_NAME=$(echo "$art" | jq -r '.name')
+                ART_URL=$(echo "$art" | jq -r '.archive_download_url')
+                TMP_ZIP="temp_${PREFIX}_${ART_NAME}_$$.zip"
+                TMP_DIR="ext_${PREFIX}_${ART_NAME}_$$"
+
+                curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -o "$TMP_ZIP" "$ART_URL"
+                if [ -s "$TMP_ZIP" ]; then
+                  mkdir -p "$TMP_DIR"
+                  unzip -q -o "$TMP_ZIP" -d "$TMP_DIR/"
+                  CHOSEN_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
+                  [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
+
+                  if [ -n "$CHOSEN_APK" ]; then
+                    cp "$CHOSEN_APK" "apk_output/${PREFIX}_$(basename "$CHOSEN_APK")"
+                  fi
+                  rm -rf "$TMP_ZIP" "$TMP_DIR"
+                fi
+              done
+            }
+
+            fetch_single_baka_run "$BAKASU_MAIN_RUN_ID" "Action_BakaSU" &
+            fetch_single_baka_run "$BAKASU_PR_RUN_ID"   "Action_BakaSU_PR" &
+            fetch_single_baka_run "$RESUKISU_RUN_ID"    "Action_ReSukiSU" &
+            wait
+          }
+
+          fetch_generic_action_apk() {
+            local REPO="$1"
+            local PREFIX="$2"
+            local ART_FILTER="$3"
+            local TMP_ID="${PREFIX}_$$"
+
+            local RUN_ID
+            RUN_ID=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO}/actions/runs?status=completed&conclusion=success&per_page=10" | jq -r '([ .workflow_runs[] | select(.name | test("build|manager|ci|apk"; "i")) | .id ] | first) // .workflow_runs[0].id // empty')
+
+            [ -z "$RUN_ID" ] && return 0
+
+            local DL_URL
+            DL_URL=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO}/actions/runs/${RUN_ID}/artifacts" | jq -r --arg flt "$ART_FILTER" '[ .artifacts[] | select(.name | test($flt; "i")) ] | first | .archive_download_url // empty')
+
+            if [ -n "$DL_URL" ]; then
+              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -o "${TMP_ID}.zip" "$DL_URL"
+              if [ -s "${TMP_ID}.zip" ]; then
+                mkdir -p "${TMP_ID}_dir"
+                unzip -q -o "${TMP_ID}.zip" -d "${TMP_ID}_dir/"
+                local FOUND_APK
+                FOUND_APK=$(find "${TMP_ID}_dir" -type f -name "*.apk" | grep -iE "arm64-v8a|arm64" | head -n 1)
+                [ -z "$FOUND_APK" ] && FOUND_APK=$(find "${TMP_ID}_dir" -type f -name "*.apk" | head -n 1)
+
+                if [ -n "$FOUND_APK" ]; then
+                  cp "$FOUND_APK" "apk_output/${PREFIX}_$(basename "$FOUND_APK")"
+                fi
+                rm -rf "${TMP_ID}.zip" "${TMP_ID}_dir"
+              fi
+            fi
+          }
+
+          for repo in "${REPOS[@]}"; do
+            fetch_release_repo "$repo" &
+          done
+
+          fetch_bakasu_all_actions &
+          fetch_generic_action_apk "SukiSU-Ultra/SukiSU-Ultra" "Action_SukiSU"   "manager|apk|sukisu" &
+          fetch_generic_action_apk "KOWX712/KernelSU"          "KOWX"            "manager|apk" &
+          fetch_generic_action_apk "midori01/KernelSU"         "Action_midori01" "manager|apk|ksu" &
+          fetch_generic_action_apk "LyraVoid/FinaSU"           "Action_FinaSU"   "manager|apk|finasu" &
+
+          wait
+
+      - name: "📦 Upload APKs Artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksu_manager_assets
+          path: apk_output/*.apk
+          retention-days: 7
+
+  # ============================================================================
+  # JOB 3: GOM KẾT QUẢ TỪ 2 JOB TRÊN VÀ TẠO CHUNG 1 RELEASE DUY NHẤT
+  # ============================================================================
+  publish_single_release:
+    name: "🚀 Publish Kernel & All Managers to Single Release"
+    needs: [build_kernel, fetch_ksu_managers]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 Download Kernel Artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel_release_assets
+          path: final_release_bundle
+
+      - name: "📥 Download KSU Manager Artifacts"
+        uses: actions/download-artifact@v4
+        with:
+          name: ksu_manager_assets
+          path: final_release_bundle
+
+      - name: "🚀 Publish Everything to Single GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "EXTREME_BMW_Build_${{ github.run_number }}_${{ github.run_id }}"
+          name: "🔥 EXTREME++ BMW Edition Kernel + Full KSU Managers Bundle (Build #${{ github.run_number }})"
+          body: |
+            ### 🏎️ EXTREME++ Gaming Kernel (BMW Edition) & Managers Bundle
+            - **Device:** POCO F4 (`munch`)
+            - **Root Mode:** `${{ inputs.root_mode }}`
+            - **Target OS:** `${{ inputs.target_os }}`
+            - **Toolchain:** ZyC-Clang 16.0.6 + LLD
+
+            ---
+            ### 📦 Trọn bộ Kernel Flash (.zip) & Full KSU Managers APKs (ARM64)
+            Bao gồm file flash kernel `.zip` và toàn bộ các ứng dụng quản lý (KSU Managers) mới nhất được gom chung trong release này.
+          files: |
+            final_release_bundle/**/*.zip
+            final_release_bundle/**/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
