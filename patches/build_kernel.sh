@@ -359,27 +359,102 @@ build_target_os() {
     scripts/config --file "${OUT_DIR}/.config" -e BBG
 
     # 2. Adreno TrustZone GPU Devfreq Governor & Bus Monitor
-    scripts/config --file "${OUT_DIR}/.config"         -e PM_DEVFREQ         -e DEVFREQ_GOV_SIMPLE_ONDEMAND         -e DEVFREQ_GOV_PERFORMANCE         -e DEVFREQ_GOV_POWERSAVE         -e DEVFREQ_GOV_USERSPACE         -e DEVFREQ_GOV_PASSIVE         -e DEVFREQ_GOV_QCOM_ADRENO_TZ         -e DEVFREQ_GOV_QCOM_GPUBW_MON         -e QCOM_KGSL         -e QCOM_KGSL_IOMMU         --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
+    scripts/config --file "${OUT_DIR}/.config" \
+        -e PM_DEVFREQ \
+        -e DEVFREQ_GOV_SIMPLE_ONDEMAND \
+        -e DEVFREQ_GOV_PERFORMANCE \
+        -e DEVFREQ_GOV_POWERSAVE \
+        -e DEVFREQ_GOV_USERSPACE \
+        -e DEVFREQ_GOV_PASSIVE \
+        -e DEVFREQ_GOV_QCOM_ADRENO_TZ \
+        -e DEVFREQ_GOV_QCOM_GPUBW_MON \
+        -e QCOM_KGSL \
+        -e QCOM_KGSL_IOMMU \
+        --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
 
     # 3. ZRAM ZSTD Zero-Stutter Memory Compression
-    scripts/config --file "${OUT_DIR}/.config"         -e ZRAM         -e CRYPTO_ZSTD         -e ZSTD_COMPRESS         -e ZSTD_DECOMPRESS         -e ZRAM_DEF_COMP_ZSTD         -d ZRAM_DEF_COMP_LZ4         --set-str ZRAM_DEF_COMP "zstd"
+    scripts/config --file "${OUT_DIR}/.config" \
+        -e ZRAM \
+        -e CRYPTO_ZSTD \
+        -e ZSTD_COMPRESS \
+        -e ZSTD_DECOMPRESS \
+        -e ZRAM_DEF_COMP_ZSTD \
+        -d ZRAM_DEF_COMP_LZ4 \
+        --set-str ZRAM_DEF_COMP "zstd"
 
     # 4. Ultra-Fast & Safe Boot (Zero-Latency EXTREME+ Governor)
-    scripts/config --file "${OUT_DIR}/.config"         -e CPU_FREQ_GOV_SCHEDUTIL         -e CPU_FREQ_GOV_EXTREME_PLUS         -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS         -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL         --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
+    scripts/config --file "${OUT_DIR}/.config" \
+        -e CPU_FREQ_GOV_SCHEDUTIL \
+        -e CPU_FREQ_GOV_EXTREME_PLUS \
+        -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
+        -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
+        --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
 
     # 5. TCP BBR Congestion Control & Lightweight Gaming Tunables
-    scripts/config --file "${OUT_DIR}/.config"         -e TCP_CONG_BBR         -e DEFAULT_BBR         --set-str DEFAULT_TCP_CONG "bbr"         -e NET_SCH_FQ         -e NET_SCH_FQ_CODEL         -d TASK_IO_ACCOUNTING         -d BLK_DEV_IO_TRACE         -d SCHEDSTATS         -d PROVE_LOCKING         -d LOCKDEP         -d LOCK_STAT         -d DEBUG_KMEMLEAK         -d DEBUG_PREEMPT
+    scripts/config --file "${OUT_DIR}/.config" \
+        -e TCP_CONG_BBR \
+        -e DEFAULT_BBR \
+        --set-str DEFAULT_TCP_CONG "bbr" \
+        -e NET_SCH_FQ \
+        -e NET_SCH_FQ_CODEL \
+        -d TASK_IO_ACCOUNTING \
+        -d BLK_DEV_IO_TRACE \
+        -d SCHEDSTATS \
+        -d PROVE_LOCKING \
+        -d LOCKDEP \
+        -d LOCK_STAT \
+        -d DEBUG_KMEMLEAK \
+        -d DEBUG_PREEMPT
 
     # 6. Root Configuration Handling
     if [ "$ROOT_TYPE" = "susfs" ]; then
         echo "[*] Injecting Full RKSU / ReSukiSU + SuSFS ${SUSFS_VER} Configuration into ${OS_UPPER} .config..."
-        scripts/config --file "${OUT_DIR}/.config"             -e KSU             -e KSU_SUSFS             -d KSU_TRACEPOINT_HOOK             -d KSU_MANUAL_HOOK             -e KSU_MULTI_MANAGER_SUPPORT             -e THREAD_INFO_IN_TASK             -e KSU_SUSFS_SUS_PATH             -e KSU_SUSFS_SUS_MOUNT             -e KSU_SUSFS_SUS_KSTAT             -e KSU_SUSFS_SPOOF_UNAME             -e KSU_SUSFS_ENABLE_LOG             -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS             -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG             -e KSU_SUSFS_OPEN_REDIRECT             -e KSU_SUSFS_SUS_MAP             -d KSU_DISABLE_MANAGER             -d KSU_DISABLE_POLICY
+        scripts/config --file "${OUT_DIR}/.config" \
+            -e KSU \
+            -e KSU_SUSFS \
+            -d KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK \
+            -e KSU_MULTI_MANAGER_SUPPORT \
+            -e THREAD_INFO_IN_TASK \
+            -e KSU_SUSFS_SUS_PATH \
+            -e KSU_SUSFS_SUS_MOUNT \
+            -e KSU_SUSFS_SUS_KSTAT \
+            -e KSU_SUSFS_SPOOF_UNAME \
+            -e KSU_SUSFS_ENABLE_LOG \
+            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -e KSU_SUSFS_OPEN_REDIRECT \
+            -e KSU_SUSFS_SUS_MAP \
+            -d KSU_DISABLE_MANAGER \
+            -d KSU_DISABLE_POLICY
     elif [ "$ROOT_TYPE" = "ksu_nosusfs" ]; then
         echo "[*] Injecting KernelSU (NO SuSFS) Configuration into ${OS_UPPER} .config..."
-        scripts/config --file "${OUT_DIR}/.config"             -e KSU             -d KSU_SUSFS             -e KSU_TRACEPOINT_HOOK             -d KSU_MANUAL_HOOK             -e KSU_MULTI_MANAGER_SUPPORT             -e THREAD_INFO_IN_TASK             -d KSU_SUSFS_SUS_PATH             -d KSU_SUSFS_SUS_MOUNT             -d KSU_SUSFS_SUS_KSTAT             -d KSU_SUSFS_SPOOF_UNAME             -d KSU_SUSFS_ENABLE_LOG             -d KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS             -d KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG             -d KSU_SUSFS_OPEN_REDIRECT             -d KSU_SUSFS_SUS_MAP             -d KSU_DISABLE_MANAGER             -d KSU_DISABLE_POLICY
+        scripts/config --file "${OUT_DIR}/.config" \
+            -e KSU \
+            -d KSU_SUSFS \
+            -e KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK \
+            -e KSU_MULTI_MANAGER_SUPPORT \
+            -e THREAD_INFO_IN_TASK \
+            -d KSU_SUSFS_SUS_PATH \
+            -d KSU_SUSFS_SUS_MOUNT \
+            -d KSU_SUSFS_SUS_KSTAT \
+            -d KSU_SUSFS_SPOOF_UNAME \
+            -d KSU_SUSFS_ENABLE_LOG \
+            -d KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -d KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -d KSU_SUSFS_OPEN_REDIRECT \
+            -d KSU_SUSFS_SUS_MAP \
+            -d KSU_DISABLE_MANAGER \
+            -d KSU_DISABLE_POLICY
     else
         echo "[*] Disabling embedded KSU for Pure Clean Kernel (${OS_UPPER})..."
-        scripts/config --file "${OUT_DIR}/.config"             -d KSU             -d KSU_SUSFS             -d KSU_TRACEPOINT_HOOK             -d KSU_MANUAL_HOOK             -d KSU_MULTI_MANAGER_SUPPORT
+        scripts/config --file "${OUT_DIR}/.config" \
+            -d KSU \
+            -d KSU_SUSFS \
+            -d KSU_TRACEPOINT_HOOK \
+            -d KSU_MANUAL_HOOK \
+            -d KSU_MULTI_MANAGER_SUPPORT
         sed -i '/CONFIG_KSU/d' "${OUT_DIR}/.config" 2>/dev/null || true
     fi
 
@@ -396,7 +471,40 @@ build_target_os() {
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_HyperOS"
         OS_BADGE="HyperOS 4 / HyperOS (Android 13–17)"
 
-        scripts/config --file "${OUT_DIR}/.config"             --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd             -e PERF_CRITICAL_RT_TASK             -e SF_BINDER             -e OVERLAY_FS             -e MIGT             -e MIGT_ENERGY_MODEL             -e MIHW             -e PACKAGE_RUNTIME_INFO             -e BINDER_OPT             -e KPERFEVENTS             -e PERF_HUMANTASK             -d LTO_CLANG             -e LTO_NONE             -d SHADOW_CALL_STACK             -e XIAOMI_MIUI             -d MI_MEMORY_SYSFS             -e TASK_DELAY_ACCT             -e MIUI_ZRAM_MEMORY_TRACKING             -e PERF_HELPER             -e BOOTUP_RECLAIM             -e MI_RECLAIM             -e RTMM             -e MILLET_CGROUP             -e MILLET_SIG             -e MILLET_BINDER             -e MILLET_PKG             -e MILLET_BINDER_GKI             -e MILLET_CORE             -e MILLET_HS             -e BINDER_PRIO             -d REKERNEL             -d REKERNEL_NETWORK             -d LTO_CLANG_THIN -d CFI_CLANG
+        scripts/config --file "${OUT_DIR}/.config" \
+            --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
+            -e PERF_CRITICAL_RT_TASK \
+            -e SF_BINDER \
+            -e OVERLAY_FS \
+            -e MIGT \
+            -e MIGT_ENERGY_MODEL \
+            -e MIHW \
+            -e PACKAGE_RUNTIME_INFO \
+            -e BINDER_OPT \
+            -e KPERFEVENTS \
+            -e PERF_HUMANTASK \
+            -d LTO_CLANG \
+            -e LTO_NONE \
+            -d SHADOW_CALL_STACK \
+            -e XIAOMI_MIUI \
+            -d MI_MEMORY_SYSFS \
+            -e TASK_DELAY_ACCT \
+            -e MIUI_ZRAM_MEMORY_TRACKING \
+            -e PERF_HELPER \
+            -e BOOTUP_RECLAIM \
+            -e MI_RECLAIM \
+            -e RTMM \
+            -e MILLET_CGROUP \
+            -e MILLET_SIG \
+            -e MILLET_BINDER \
+            -e MILLET_PKG \
+            -e MILLET_BINDER_GKI \
+            -e MILLET_CORE \
+            -e MILLET_HS \
+            -e BINDER_PRIO \
+            -d REKERNEL \
+            -d REKERNEL_NETWORK \
+            -d LTO_CLANG_THIN -d CFI_CLANG
     else
         echo "[*] Injecting Clean AOSP Subsystems (Android 16 & 17 Tested & Verified)..."
         LOCALVER="-Extreme++Gaming-AOSP-BMW"
@@ -404,7 +512,38 @@ build_target_os() {
         ZIP_BASE="EXTREME++Gaming_BMW_Edition_AOSP"
         OS_BADGE="AOSP Custom ROMs (Android 13–17 / A16 & A17 Tested)"
 
-        scripts/config --file "${OUT_DIR}/.config"             --set-str STATIC_USERMODEHELPER_PATH ""             -d XIAOMI_MIUI             -d MIGT             -d MIGT_ENERGY_MODEL             -d MIHW             -d SF_BINDER             -d RTMM             -d BOOTUP_RECLAIM             -d MI_RECLAIM             -d PERF_HELPER             -d PERF_HUMANTASK             -d PERF_CRITICAL_RT_TASK             -d MILLET_CGROUP             -d MILLET_SIG             -d MILLET_BINDER             -d MILLET_PKG             -d MILLET_BINDER_GKI             -d MILLET_CORE             -d MILLET_HS             -d BINDER_PRIO             -d PACKAGE_RUNTIME_INFO             -d BINDER_OPT             -d MIUI_ZRAM_MEMORY_TRACKING             -d MI_MEMORY_SYSFS             -e OVERLAY_FS             -e REKERNEL             -e REKERNEL_NETWORK             -d LTO_CLANG             -e LTO_NONE             -d SHADOW_CALL_STACK             -d LTO_CLANG_THIN -d CFI_CLANG
+        scripts/config --file "${OUT_DIR}/.config" \
+            --set-str STATIC_USERMODEHELPER_PATH "" \
+            -d XIAOMI_MIUI \
+            -d MIGT \
+            -d MIGT_ENERGY_MODEL \
+            -d MIHW \
+            -d SF_BINDER \
+            -d RTMM \
+            -d BOOTUP_RECLAIM \
+            -d MI_RECLAIM \
+            -d PERF_HELPER \
+            -d PERF_HUMANTASK \
+            -d PERF_CRITICAL_RT_TASK \
+            -d MILLET_CGROUP \
+            -d MILLET_SIG \
+            -d MILLET_BINDER \
+            -d MILLET_PKG \
+            -d MILLET_BINDER_GKI \
+            -d MILLET_CORE \
+            -d MILLET_HS \
+            -d BINDER_PRIO \
+            -d PACKAGE_RUNTIME_INFO \
+            -d BINDER_OPT \
+            -d MIUI_ZRAM_MEMORY_TRACKING \
+            -d MI_MEMORY_SYSFS \
+            -e OVERLAY_FS \
+            -e REKERNEL \
+            -e REKERNEL_NETWORK \
+            -d LTO_CLANG \
+            -e LTO_NONE \
+            -d SHADOW_CALL_STACK \
+            -d LTO_CLANG_THIN -d CFI_CLANG
     fi
 
     scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "${LOCALVER}"
