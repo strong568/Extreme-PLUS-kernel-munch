@@ -138,19 +138,16 @@ jobs:
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
 
-          # Lấy danh sách 30 lần chạy hoàn tất và thành công gần nhất
           BAKA_RUNS_JSON=$(curl -sL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-          # Cờ đánh dấu đã tìm thấy APK để dừng sớm
           FOUND_BAKA=0
           FOUND_RESUKI=0
           FOUND_SPOOFED=0
 
           for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
-            # Nếu đã tìm thấy đủ 3 bản thì thoát vòng lặp
             [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && [ "$FOUND_SPOOFED" -eq 1 ] && break
             [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
             
@@ -160,43 +157,75 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${RUN_ID}/artifacts")
 
-            # Duyệt qua các file đính kèm (artifacts)
-            for ART_URL in $(echo "$ART_JSON" | jq -r '.artifacts[]?.archive_download_url'); do
-              [ -z "$ART_URL" ] || [ "$ART_URL" == "null" ] && continue
+            for b64 in $(echo "$ART_JSON" | jq -r '.artifacts[]? | @base64'); do
+              [ -z "$b64" ] && continue
+              _decoded=$(echo "$b64" | base64 --decode)
+              ART_NAME=$(echo "$_decoded" | jq -r '.name // empty')
+              ART_URL=$(echo "$_decoded" | jq -r '.archive_download_url // empty')
               
-              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -o "temp_bakasu.zip" "$ART_URL"
+              [ -z "$ART_URL" ] && continue
               
-              if [ -s "temp_bakasu.zip" ]; then
-                mkdir -p ext_bakasu
-                unzip -q -o temp_bakasu.zip -d ext_bakasu/
+              IS_SPOOFED=0
+              IS_RESUKI=0
+              IS_NORMAL=0
+              
+              if echo "$ART_NAME" | grep -qi "spoof"; then
+                [ "$FOUND_SPOOFED" -eq 1 ] && continue
+                IS_SPOOFED=1
+              elif echo "$ART_NAME" | grep -qi "resuki"; then
+                [ "$FOUND_RESUKI" -eq 1 ] && continue
+                IS_RESUKI=1
+              elif echo "$ART_NAME" | grep -qiE "manager|apk"; then
+                [ "$FOUND_BAKA" -eq 1 ] && continue
+                IS_NORMAL=1
+              else
+                continue
+              fi
+              
+              TMP_ZIP="temp_bakasu_$$.zip"
+              TMP_DIR="ext_bakasu_$$"
+              
+              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -o "$TMP_ZIP" "$ART_URL"
+              
+              if [ -s "$TMP_ZIP" ]; then
+                mkdir -p "$TMP_DIR"
+                unzip -q -o "$TMP_ZIP" -d "$TMP_DIR/"
 
-                # 1. Tìm bản ReSukiSU (chứa resuki, KHÔNG debug)
-                if [ "$FOUND_RESUKI" -eq 0 ]; then
-                  RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                  [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                  [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | head -n 1)
+                TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | head -n 1)
+                
+                if [ -n "$TARGET_APK" ]; then
+                  RAW_NAME=$(basename "$TARGET_APK")
                   
-                  if [ -n "$RESUKI_APK" ]; then
-                    RAW_NAME=$(basename "$RESUKI_APK")
-                    cp "$RESUKI_APK" "apk_output/Action_ReSukiSU_${RAW_NAME}"
-                    echo "✅ Saved ReSukiSU: apk_output/Action_ReSukiSU_${RAW_NAME}"
-                    FOUND_RESUKI=1
-                  fi
-                fi
-
-                # 2. Tìm bản Spoofed Manager (chứa spoof, KHÔNG debug)
-                if [ "$FOUND_SPOOFED" -eq 0 ]; then
-                  SPOOFED_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                  [ -z "$SPOOFED_APK" ] && SPOOFED_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                  [ -z "$SPOOFED_APK" ] && SPOOFED_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | head -n 1)
-                  
-                  if [ -n "$SPOOFED_APK" ]; then
-                    RAW_NAME=$(basename "$SPOOFED_APK")
-                    cp "$SPOOFED_APK" "apk_output/Action_Spoofed_BakaSU_${RAW_NAME}"
+                  if [ "$IS_SPOOFED" -eq 1 ]; then
+                    cp "$TARGET_APK" "apk_output/Action_Spoofed_BakaSU_${RAW_NAME}"
                     echo "✅ Saved Spoofed BakaSU: apk_output/Action_Spoofed_BakaSU_${RAW_NAME}"
                     FOUND_SPOOFED=1
+                  elif [ "$IS_RESUKI" -eq 1 ]; then
+                    cp "$TARGET_APK" "apk_output/Action_ReSukiSU_${RAW_NAME}"
+                    echo "✅ Saved ReSukiSU: apk_output/Action_ReSukiSU_${RAW_NAME}"
+                    FOUND_RESUKI=1
+                  elif [ "$IS_NORMAL" -eq 1 ]; then
+                    if echo "$RAW_NAME" | grep -qi "resuki"; then
+                      if [ "$FOUND_RESUKI" -eq 0 ]; then
+                        cp "$TARGET_APK" "apk_output/Action_ReSukiSU_${RAW_NAME}"
+                        echo "✅ Saved ReSukiSU (fallback): apk_output/Action_ReSukiSU_${RAW_NAME}"
+                        FOUND_RESUKI=1
+                      fi
+                    else
+                      cp "$TARGET_APK" "apk_output/Action_BakaSU_${RAW_NAME}"
+                      echo "✅ Saved BakaSU: apk_output/Action_BakaSU_${RAW_NAME}"
+                      FOUND_BAKA=1
+                    fi
                   fi
                 fi
+                rm -rf "$TMP_DIR"
+              fi
+              rm -f "$TMP_ZIP"
+            done
+          done
+
 
                 # 3. Tìm bản BakaSU gốc (KHÔNG resuki, KHÔNG spoof, KHÔNG debug)
                 if [ "$FOUND_BAKA" -eq 0 ]; then
