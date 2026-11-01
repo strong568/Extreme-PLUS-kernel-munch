@@ -227,26 +227,6 @@ jobs:
           done
 
 
-                # 3. Tìm bản BakaSU gốc (KHÔNG resuki, KHÔNG spoof, KHÔNG debug)
-                if [ "$FOUND_BAKA" -eq 0 ]; then
-                  BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | head -n 1)
-                  
-                  if [ -n "$BAKA_APK" ]; then
-                    RAW_NAME=$(basename "$BAKA_APK")
-                    cp "$BAKA_APK" "apk_output/Action_BakaSU_${RAW_NAME}"
-                    echo "✅ Saved BakaSU: apk_output/Action_BakaSU_${RAW_NAME}"
-                    FOUND_BAKA=1
-                  fi
-                fi
-
-                rm -rf ext_bakasu
-              fi
-              rm -f temp_bakasu.zip
-            done
-          done
-
           # ----------------------------------------------------
           # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts (Chỉ ARM64)
           # ----------------------------------------------------
