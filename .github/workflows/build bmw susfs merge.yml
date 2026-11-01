@@ -232,51 +232,69 @@ jobs:
           }
 
           fetch_bakasu_all_actions() {
+            echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
             local BAKA_RUNS_JSON
             BAKA_RUNS_JSON=$(curl -sL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-            local BAKASU_PR_RUN_ID RESUKISU_RUN_ID BAKASU_MAIN_RUN_ID
-            BAKASU_PR_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.event == "pull_request") or (.head_branch | test("pr|pull"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
-            RESUKISU_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select(((.head_branch | test("resuki"; "i")) or (.name | test("resuki"; "i"))) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
-            BAKASU_MAIN_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '[ .workflow_runs[] | select((.event != "pull_request") and (.head_branch | test("main|master"; "i")) and (.name | test("build.*manager|manager|ci"; "i"))) ] | first | .id // empty')
+            local FOUND_BAKA=0
+            local FOUND_RESUKI=0
 
-            fetch_single_baka_run() {
-              local R_ID="$1"
-              local PREFIX="$2"
-              [ -z "$R_ID" ] && return 0
-
+            for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
+              [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && break
+              [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
+              
               local ART_JSON
-              ART_JSON=$(curl -sL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${R_ID}/artifacts")
+              ART_JSON=$(curl -sL \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${RUN_ID}/artifacts")
 
-              echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk"; "i"))' | while read -r art; do
-                local ART_NAME ART_URL TMP_ZIP TMP_DIR CHOSEN_APK
-                ART_NAME=$(echo "$art" | jq -r '.name')
-                ART_URL=$(echo "$art" | jq -r '.archive_download_url')
-                TMP_ZIP="temp_${PREFIX}_${ART_NAME}_$$.zip"
-                TMP_DIR="ext_${PREFIX}_${ART_NAME}_$$"
-
+              for ART_URL in $(echo "$ART_JSON" | jq -r '.artifacts[]?.archive_download_url'); do
+                [ -z "$ART_URL" ] || [ "$ART_URL" == "null" ] && continue
+                
+                local TMP_ZIP="temp_bakasu_$$.zip"
+                local TMP_DIR="ext_bakasu_$$"
+                
                 curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -o "$TMP_ZIP" "$ART_URL"
+                
                 if [ -s "$TMP_ZIP" ]; then
                   mkdir -p "$TMP_DIR"
                   unzip -q -o "$TMP_ZIP" -d "$TMP_DIR/"
-                  CHOSEN_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -iE "arm64-v8a.*release|arm64.*release" | head -n 1)
-                  [ -z "$CHOSEN_APK" ] && CHOSEN_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "arm64" | head -n 1)
 
-                  if [ -n "$CHOSEN_APK" ]; then
-                    cp "$CHOSEN_APK" "apk_output/${PREFIX}_$(basename "$CHOSEN_APK")"
+                  # 1. Tìm bản ReSukiSU (chứa chữ resuki, KHÔNG chứa debug)
+                  if [ "$FOUND_RESUKI" -eq 0 ]; then
+                    local RESUKI_APK
+                    RESUKI_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                    [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                    [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | head -n 1)
+                    
+                    if [ -n "$RESUKI_APK" ]; then
+                      cp "$RESUKI_APK" "apk_output/Action_ReSukiSU_$(basename "$RESUKI_APK")"
+                      FOUND_RESUKI=1
+                    fi
                   fi
-                  rm -rf "$TMP_ZIP" "$TMP_DIR"
-                fi
-              done
-            }
 
-            fetch_single_baka_run "$BAKASU_MAIN_RUN_ID" "Action_BakaSU" &
-            fetch_single_baka_run "$BAKASU_PR_RUN_ID"   "Action_BakaSU_PR" &
-            fetch_single_baka_run "$RESUKISU_RUN_ID"    "Action_ReSukiSU" &
-            wait
+                  # 2. Tìm bản BakaSU gốc (KHÔNG chứa resuki, KHÔNG chứa debug)
+                  if [ "$FOUND_BAKA" -eq 0 ]; then
+                    local BAKA_APK
+                    BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                    [ -z "$BAKA_APK" ] && BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                    [ -z "$BAKA_APK" ] && BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | head -n 1)
+                    
+                    if [ -n "$BAKA_APK" ]; then
+                      cp "$BAKA_APK" "apk_output/Action_BakaSU_$(basename "$BAKA_APK")"
+                      FOUND_BAKA=1
+                    fi
+                  fi
+
+                  rm -rf "$TMP_DIR"
+                fi
+                rm -f "$TMP_ZIP"
+              done
+            done
           }
 
           fetch_generic_action_apk() {
