@@ -133,70 +133,73 @@ jobs:
           done
 
           # ----------------------------------------------------
-          # 2. Lấy APK Action từ Baka-SU/BakaSU (Lần xanh lá thành công mới nhất)
+          # 2. Lấy APK Action từ Baka-SU/BakaSU (Quét các Run xanh lá gần nhất)
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
 
-          # Chỉ lấy danh sách các Action hoàn tất và đánh dấu xanh lá (success)
+          # Lấy danh sách 30 lần chạy hoàn tất và thành công gần nhất
           BAKA_RUNS_JSON=$(curl -sL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-          # Lấy Run ID của bản build manager thành công mới nhất (bỏ qua điều kiện tên branch)
-          LATEST_SUCCESS_RUN_ID=$(echo "$BAKA_RUNS_JSON" | jq -r '
-            [ .workflow_runs[] | select(.name | test("build.*manager|manager|ci"; "i")) ] | first | .id // empty
-          ')
+          # Cờ đánh dấu đã tìm thấy APK để không ghi đè và dừng vòng lặp sớm
+          FOUND_BAKA=0
+          FOUND_RESUKI=0
 
-          if [ -n "$LATEST_SUCCESS_RUN_ID" ]; then
-            echo "[*] Found latest successful BakaSU Run ID: $LATEST_SUCCESS_RUN_ID"
-
+          for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
+            # Nếu đã tìm thấy đủ 2 bản (BakaSU gốc và ReSukiSU) thì thoát vòng lặp
+            [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && break
+            [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
+            
+            echo "[*] Checking BakaSU Run ID: $RUN_ID"
             ART_JSON=$(curl -sL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${LATEST_SUCCESS_RUN_ID}/artifacts")
+              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${RUN_ID}/artifacts")
 
-            echo "$ART_JSON" | jq -c '.artifacts[]? | select(.name | test("manager|apk"; "i"))' | while read -r art; do
-              ART_NAME=$(echo "$art" | jq -r '.name')
-              ART_URL=$(echo "$art" | jq -r '.archive_download_url')
+            # Duyệt qua các file đính kèm (artifacts) của lần chạy này
+            for ART_URL in $(echo "$ART_JSON" | jq -r '.artifacts[]?.archive_download_url'); do
+              [ -z "$ART_URL" ] || [ "$ART_URL" == "null" ] && continue
+              
+              curl -fLSs -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -o "temp_bakasu.zip" "$ART_URL"
+              
+              if [ -s "temp_bakasu.zip" ]; then
+                mkdir -p ext_bakasu
+                unzip -q -o temp_bakasu.zip -d ext_bakasu/
 
-              curl -fLSs \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                -o "temp_bakasu_${ART_NAME}.zip" \
-                "$ART_URL"
-
-              if [ -s "temp_bakasu_${ART_NAME}.zip" ]; then
-                mkdir -p "ext_bakasu_${ART_NAME}"
-                unzip -q -o "temp_bakasu_${ART_NAME}.zip" -d "ext_bakasu_${ART_NAME}/"
-
-                # 1. Tìm và lưu bản ReSukiSU (com.resukisu.resukisu)
-                RESUKI_APK=$(find "ext_bakasu_${ART_NAME}" -type f -name "*.apk" | grep -i "resuki" | grep -iE "arm64-v8a|arm64" | head -n 1)
-                [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find "ext_bakasu_${ART_NAME}" -type f -name "*.apk" | grep -i "resuki" | head -n 1)
-                
-                if [ -n "$RESUKI_APK" ]; then
-                  RAW_NAME=$(basename "$RESUKI_APK")
-                  cp "$RESUKI_APK" "apk_output/Action_ReSukiSU_${RAW_NAME}"
-                  echo "✅ Saved ReSukiSU (com.resukisu.resukisu): apk_output/Action_ReSukiSU_${RAW_NAME}"
+                # 1. Tìm bản ReSukiSU (chứa chữ resuki trong tên)
+                if [ "$FOUND_RESUKI" -eq 0 ]; then
+                  RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -iE "arm64-v8a|arm64" | head -n 1)
+                  [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | head -n 1)
+                  
+                  if [ -n "$RESUKI_APK" ]; then
+                    RAW_NAME=$(basename "$RESUKI_APK")
+                    cp "$RESUKI_APK" "apk_output/Action_ReSukiSU_${RAW_NAME}"
+                    echo "✅ Saved ReSukiSU: apk_output/Action_ReSukiSU_${RAW_NAME}"
+                    FOUND_RESUKI=1
+                  fi
                 fi
 
-                # 2. Tìm và lưu bản BakaSU gốc (nếu có)
-                BAKA_APK=$(find "ext_bakasu_${ART_NAME}" -type f -name "*.apk" | grep -v -i "resuki" | grep -iE "arm64-v8a|arm64" | head -n 1)
-                [ -z "$BAKA_APK" ] && BAKA_APK=$(find "ext_bakasu_${ART_NAME}" -type f -name "*.apk" | grep -v -i "resuki" | head -n 1)
-                
-                if [ -n "$BAKA_APK" ]; then
-                  RAW_NAME=$(basename "$BAKA_APK")
-                  cp "$BAKA_APK" "apk_output/Action_BakaSU_${RAW_NAME}"
-                  echo "✅ Saved BakaSU: apk_output/Action_BakaSU_${RAW_NAME}"
+                # 2. Tìm bản BakaSU gốc (không chứa chữ resuki)
+                if [ "$FOUND_BAKA" -eq 0 ]; then
+                  BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -iE "arm64-v8a|arm64" | head -n 1)
+                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | head -n 1)
+                  
+                  if [ -n "$BAKA_APK" ]; then
+                    RAW_NAME=$(basename "$BAKA_APK")
+                    cp "$BAKA_APK" "apk_output/Action_BakaSU_${RAW_NAME}"
+                    echo "✅ Saved BakaSU: apk_output/Action_BakaSU_${RAW_NAME}"
+                    FOUND_BAKA=1
+                  fi
                 fi
 
-                rm -rf "temp_bakasu_${ART_NAME}.zip" "ext_bakasu_${ART_NAME}"
+                rm -rf ext_bakasu
               fi
+              rm -f temp_bakasu.zip
             done
-          else
-            echo "⚠️ Could not find any successful runs for Baka-SU/BakaSU"
-          fi
+          done
 
           # ----------------------------------------------------
           # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts (Chỉ ARM64)
