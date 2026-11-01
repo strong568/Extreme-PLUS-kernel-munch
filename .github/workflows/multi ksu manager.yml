@@ -133,7 +133,7 @@ jobs:
           done
 
           # ----------------------------------------------------
-          # 2. Lấy APK Action từ Baka-SU/BakaSU (Quét các Run xanh lá gần nhất)
+          # 2. Lấy APK Action từ Baka-SU/BakaSU (Loại bỏ Debug, Ưu tiên Release)
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
@@ -149,7 +149,7 @@ jobs:
           FOUND_RESUKI=0
 
           for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
-            # Nếu đã tìm thấy đủ 2 bản (BakaSU gốc và ReSukiSU) thì thoát vòng lặp
+            # Nếu đã tìm thấy đủ 2 bản thì thoát vòng lặp
             [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && break
             [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
             
@@ -159,7 +159,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs/${RUN_ID}/artifacts")
 
-            # Duyệt qua các file đính kèm (artifacts) của lần chạy này
+            # Duyệt qua các file đính kèm (artifacts)
             for ART_URL in $(echo "$ART_JSON" | jq -r '.artifacts[]?.archive_download_url'); do
               [ -z "$ART_URL" ] || [ "$ART_URL" == "null" ] && continue
               
@@ -169,10 +169,14 @@ jobs:
                 mkdir -p ext_bakasu
                 unzip -q -o temp_bakasu.zip -d ext_bakasu/
 
-                # 1. Tìm bản ReSukiSU (chứa chữ resuki trong tên)
+                # 1. Tìm bản ReSukiSU (chứa chữ resuki, KHÔNG chứa debug)
                 if [ "$FOUND_RESUKI" -eq 0 ]; then
-                  RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -iE "arm64-v8a|arm64" | head -n 1)
-                  [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | head -n 1)
+                  # Ưu tiên đúng file arm64-v8a-release
+                  RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                  # Fallback: Chứa chữ arm64 và release
+                  [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                  # Fallback cuối: Bất kỳ file nào miễn không phải debug
+                  [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | head -n 1)
                   
                   if [ -n "$RESUKI_APK" ]; then
                     RAW_NAME=$(basename "$RESUKI_APK")
@@ -182,10 +186,14 @@ jobs:
                   fi
                 fi
 
-                # 2. Tìm bản BakaSU gốc (không chứa chữ resuki)
+                # 2. Tìm bản BakaSU gốc (KHÔNG chứa resuki, KHÔNG chứa debug)
                 if [ "$FOUND_BAKA" -eq 0 ]; then
-                  BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -iE "arm64-v8a|arm64" | head -n 1)
-                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | head -n 1)
+                  # Ưu tiên đúng file arm64-v8a-release
+                  BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                  # Fallback: Chứa chữ arm64 và release
+                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                  # Fallback cuối: Bất kỳ file nào miễn không phải debug
+                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | head -n 1)
                   
                   if [ -n "$BAKA_APK" ]; then
                     RAW_NAME=$(basename "$BAKA_APK")
@@ -200,6 +208,7 @@ jobs:
               rm -f temp_bakasu.zip
             done
           done
+
 
           # ----------------------------------------------------
           # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts (Chỉ ARM64)
