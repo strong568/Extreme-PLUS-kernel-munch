@@ -135,7 +135,7 @@ if apk_sign_path:
         content = f.read()
 
     hook_target = "return check_v2_signature(path, signature_index);"
-    hook_replacement = """// Bulletproof Fallback: check known manager package names
+    hook_replacement = r"""// Bulletproof Fallback: check known manager package names
     if (check_v2_signature(path, signature_index))
         return true;
     char pkg_buf[128];
