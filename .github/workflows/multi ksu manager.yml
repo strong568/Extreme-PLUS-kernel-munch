@@ -133,7 +133,7 @@ jobs:
           done
 
           # ----------------------------------------------------
-          # 2. Lấy APK Action từ Baka-SU/BakaSU (Loại bỏ Debug, Ưu tiên Release)
+          # 2. Lấy APK Action từ Baka-SU/BakaSU (BakaSU, ReSukiSU, Spoofed)
           # ----------------------------------------------------
           echo "========================================"
           echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
@@ -144,13 +144,14 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
 
-          # Cờ đánh dấu đã tìm thấy APK để không ghi đè và dừng vòng lặp sớm
+          # Cờ đánh dấu đã tìm thấy APK để dừng sớm
           FOUND_BAKA=0
           FOUND_RESUKI=0
+          FOUND_SPOOFED=0
 
           for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
-            # Nếu đã tìm thấy đủ 2 bản thì thoát vòng lặp
-            [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && break
+            # Nếu đã tìm thấy đủ 3 bản thì thoát vòng lặp
+            [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && [ "$FOUND_SPOOFED" -eq 1 ] && break
             [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
             
             echo "[*] Checking BakaSU Run ID: $RUN_ID"
@@ -169,13 +170,10 @@ jobs:
                 mkdir -p ext_bakasu
                 unzip -q -o temp_bakasu.zip -d ext_bakasu/
 
-                # 1. Tìm bản ReSukiSU (chứa chữ resuki, KHÔNG chứa debug)
+                # 1. Tìm bản ReSukiSU (chứa resuki, KHÔNG debug)
                 if [ "$FOUND_RESUKI" -eq 0 ]; then
-                  # Ưu tiên đúng file arm64-v8a-release
                   RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                  # Fallback: Chứa chữ arm64 và release
                   [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                  # Fallback cuối: Bất kỳ file nào miễn không phải debug
                   [ -z "$RESUKI_APK" ] && RESUKI_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | head -n 1)
                   
                   if [ -n "$RESUKI_APK" ]; then
@@ -186,14 +184,25 @@ jobs:
                   fi
                 fi
 
-                # 2. Tìm bản BakaSU gốc (KHÔNG chứa resuki, KHÔNG chứa debug)
+                # 2. Tìm bản Spoofed Manager (chứa spoof, KHÔNG debug)
+                if [ "$FOUND_SPOOFED" -eq 0 ]; then
+                  SPOOFED_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                  [ -z "$SPOOFED_APK" ] && SPOOFED_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                  [ -z "$SPOOFED_APK" ] && SPOOFED_APK=$(find ext_bakasu -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | head -n 1)
+                  
+                  if [ -n "$SPOOFED_APK" ]; then
+                    RAW_NAME=$(basename "$SPOOFED_APK")
+                    cp "$SPOOFED_APK" "apk_output/Action_Spoofed_BakaSU_${RAW_NAME}"
+                    echo "✅ Saved Spoofed BakaSU: apk_output/Action_Spoofed_BakaSU_${RAW_NAME}"
+                    FOUND_SPOOFED=1
+                  fi
+                fi
+
+                # 3. Tìm bản BakaSU gốc (KHÔNG resuki, KHÔNG spoof, KHÔNG debug)
                 if [ "$FOUND_BAKA" -eq 0 ]; then
-                  # Ưu tiên đúng file arm64-v8a-release
-                  BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                  # Fallback: Chứa chữ arm64 và release
-                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                  # Fallback cuối: Bất kỳ file nào miễn không phải debug
-                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | head -n 1)
+                  BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                  [ -z "$BAKA_APK" ] && BAKA_APK=$(find ext_bakasu -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | head -n 1)
                   
                   if [ -n "$BAKA_APK" ]; then
                     RAW_NAME=$(basename "$BAKA_APK")
@@ -208,7 +217,6 @@ jobs:
               rm -f temp_bakasu.zip
             done
           done
-
 
           # ----------------------------------------------------
           # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts (Chỉ ARM64)

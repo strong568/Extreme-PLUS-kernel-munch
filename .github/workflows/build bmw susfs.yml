@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       patches_branch:
-        description: 'Branch chứa thư mục patches (Mặc định: bmw_ResukiSU_Susfs_noSusfs | Gợi ý: main cũng chạy tốt)'
+        description: 'Branch chứa thư mục patches (Mặc định: bmw_ResukiSU_Susfs_noSusfs | Gợi ý: main hay bmw_BakaSU cũng chạy tốt)'
         required: true
         type: string
         default: 'bmw_ResukiSU_Susfs_noSusfs'
@@ -277,9 +277,10 @@ jobs:
 
             local FOUND_BAKA=0
             local FOUND_RESUKI=0
+            local FOUND_SPOOFED=0
 
             for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
-              [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && break
+              [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && [ "$FOUND_SPOOFED" -eq 1 ] && break
               [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
               
               local ART_JSON
@@ -300,7 +301,7 @@ jobs:
                   mkdir -p "$TMP_DIR"
                   unzip -q -o "$TMP_ZIP" -d "$TMP_DIR/"
 
-                  # 1. Tìm bản ReSukiSU (chứa chữ resuki, KHÔNG chứa debug)
+                  # 1. Tìm bản ReSukiSU (chứa resuki, KHÔNG debug)
                   if [ "$FOUND_RESUKI" -eq 0 ]; then
                     local RESUKI_APK
                     RESUKI_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
@@ -313,12 +314,25 @@ jobs:
                     fi
                   fi
 
-                  # 2. Tìm bản BakaSU gốc (KHÔNG chứa resuki, KHÔNG chứa debug)
+                  # 2. Tìm bản Spoofed Manager (chứa spoof, KHÔNG debug)
+                  if [ "$FOUND_SPOOFED" -eq 0 ]; then
+                    local SPOOFED_APK
+                    SPOOFED_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                    [ -z "$SPOOFED_APK" ] && SPOOFED_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                    [ -z "$SPOOFED_APK" ] && SPOOFED_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -i "spoof" | grep -v -i "debug" | head -n 1)
+                    
+                    if [ -n "$SPOOFED_APK" ]; then
+                      cp "$SPOOFED_APK" "apk_output/Action_Spoofed_BakaSU_$(basename "$SPOOFED_APK")"
+                      FOUND_SPOOFED=1
+                    fi
+                  fi
+
+                  # 3. Tìm bản BakaSU gốc (KHÔNG resuki, KHÔNG spoof, KHÔNG debug)
                   if [ "$FOUND_BAKA" -eq 0 ]; then
                     local BAKA_APK
-                    BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                    [ -z "$BAKA_APK" ] && BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                    [ -z "$BAKA_APK" ] && BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "debug" | head -n 1)
+                    BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
+                    [ -z "$BAKA_APK" ] && BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
+                    [ -z "$BAKA_APK" ] && BAKA_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "resuki" | grep -v -i "spoof" | grep -v -i "debug" | head -n 1)
                     
                     if [ -n "$BAKA_APK" ]; then
                       cp "$BAKA_APK" "apk_output/Action_BakaSU_$(basename "$BAKA_APK")"
@@ -332,6 +346,7 @@ jobs:
               done
             done
           }
+
            
           fetch_generic_action_apk() {
             local REPO="$1"
