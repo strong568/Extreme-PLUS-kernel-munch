@@ -136,18 +136,18 @@ jobs:
           # 2. Lấy APK Action từ Baka-SU/BakaSU (BakaSU, ReSukiSU, Spoofed)
           # ----------------------------------------------------
           echo "========================================"
-          echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
+          echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success & Main branch only)..."
 
           BAKA_RUNS_JSON=$(curl -sL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
+            "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&branch=main&per_page=30")
 
           FOUND_BAKA=0
           FOUND_RESUKI=0
           FOUND_SPOOFED=0
 
-          for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
+          for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]? | select(.event != "pull_request") | .id'); do
             [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && [ "$FOUND_SPOOFED" -eq 1 ] && break
             [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
             
@@ -191,9 +191,9 @@ jobs:
                 mkdir -p "$TMP_DIR"
                 unzip -q -o "$TMP_ZIP" -d "$TMP_DIR/"
 
-                TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | head -n 1)
+                TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -v -i "\.pr" | grep -i "arm64-v8a-release" | head -n 1)
+                [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -v -i "\.pr" | grep -i "arm64.*release" | head -n 1)
+                [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -v -i "\.pr" | head -n 1)
                 
                 if [ -n "$TARGET_APK" ]; then
                   RAW_NAME=$(basename "$TARGET_APK")
@@ -225,7 +225,6 @@ jobs:
               rm -f "$TMP_ZIP"
             done
           done
-
 
           # ----------------------------------------------------
           # 3. Lấy APK mới nhất từ SukiSU-Ultra Actions Artifacts (Chỉ ARM64)
