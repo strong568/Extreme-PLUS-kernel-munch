@@ -48,6 +48,9 @@ case "$TARGET_OS" in
     *) TARGET_OS="both" ;;
 esac
 
+# Chọn phiên bản FinaSU: Đặt "master" (để tự động lấy mới nhất) hoặc gõ cứng (ví dụ: "v1.4.0", "v1.3.2")
+FINASU_SETUP_VER="master"
+
 KERNEL_DIR="$(pwd)"
 TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
 
@@ -104,7 +107,7 @@ CONFIG_NET_SCH_FQ_CODEL=y
 EOF
 
 # ------------------------------------------
-# 3. KernelSU (RKSU / ReSukiSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup Function
+# 3. KernelSU (RKSU / FinaSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup Function
 # ------------------------------------------
 inject_ksu_susfs() {
     if [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ]; then
@@ -114,7 +117,7 @@ inject_ksu_susfs() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "⚡ Injecting FinaSU Manager & SuSFS v2.3.0 Source..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    curl -LSs "https://raw.githubusercontent.com/LyraVoid/FinaSU/refs/heads/master/kernel/setup.sh" | bash -s -- v1.3.2
+    curl -LSs "https://raw.githubusercontent.com/LyraVoid/FinaSU/refs/heads/master/kernel/setup.sh" | bash -s -- "$FINASU_SETUP_VER"
 
     if [ -f "drivers/kernelsu/Kconfig" ]; then
         sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
@@ -325,19 +328,33 @@ build_target_os() {
     local ROOT_BANNER="Pure Clean Base (No Root)"
     local ZIP_SUFFIX="NoRoot"
 
+    local FINASU_VER=""
+    
+    # Kiểm tra biến: Nếu là "master" thì kéo API lấy số bản mới nhất, nếu gõ tay thì dùng luôn số đó
+    if [ "$FINASU_SETUP_VER" == "master" ]; then
+        FINASU_VER=$(curl -s https://api.github.com/repos/LyraVoid/FinaSU/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        [ -z "$FINASU_VER" ] && FINASU_VER="Latest"
+    else
+        FINASU_VER="$FINASU_SETUP_VER"
+    fi
+
     if [ "$ROOT_TYPE" == "1" ] || [ "$ROOT_TYPE" == "ksu_susfs" ]; then
         ENABLE_KSU=1
         ENABLE_SUSFS=1
-        ROOT_LABEL="FinaSU + SuSFS v2.3.0"
-        ROOT_BANNER="FinaSU + SuSFS v2.3.0 (Multi-Manager)"
-        ZIP_SUFFIX="FinaSU_SuSFS"
+        
+        ROOT_LABEL="FinaSU ${FINASU_VER} + SuSFS v2.3.0"
+        ROOT_BANNER="FinaSU ${FINASU_VER} + SuSFS v2.3.0 (Multi-Manager)"
+        ZIP_SUFFIX="FinaSU_${FINASU_VER}_SuSFS"
+        
     elif [ "$ROOT_TYPE" == "2" ] || [ "$ROOT_TYPE" == "ksu_no_susfs" ]; then
         ENABLE_KSU=1
         ENABLE_SUSFS=0
-        ROOT_LABEL="FinaSU Multi-Manager (No SuSFS)"
-        ROOT_BANNER="FinaSU Multi-Manager (Clean / No SuSFS)"
-        ZIP_SUFFIX="FinaSU_NoSuSFS"
+        
+        ROOT_LABEL="FinaSU ${FINASU_VER} Multi-Manager (No SuSFS)"
+        ROOT_BANNER="FinaSU ${FINASU_VER} Multi-Manager (Clean / No SuSFS)"
+        ZIP_SUFFIX="FinaSU_${FINASU_VER}_NoSuSFS"
     fi
+
     local OUT_DIR="${KERNEL_DIR}/out_${OS}"
     local MAKE_OPTS=(
         O="${OUT_DIR}"
