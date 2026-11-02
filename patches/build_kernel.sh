@@ -341,27 +341,25 @@ build_target_os() {
         ZIP_SUFFIX="BakaSU_NoSuSFS"
     fi
     local OUT_DIR="${KERNEL_DIR}/out_${OS}"
+    
+    # [FIX]: Sử dụng CC cờ '-target' cho CLANG thay vì cấu hình biến môi trường rác
     local MAKE_OPTS=(
         O="${OUT_DIR}"
         ARCH="${ARCH}"
         SUBARCH="${SUBARCH}"
         LLVM=1
         LLVM_IAS=1
-        CC="ccache clang"
+        CC="ccache clang -target aarch64-linux-gnu"
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
-        CLANG_TRIPLE="aarch64-linux-gnu-"
         LD="ld.lld"
         AR="llvm-ar"
         NM="llvm-nm"
         OBJCOPY="llvm-objcopy"
         OBJDUMP="llvm-objdump"
         STRIP="llvm-strip"
-        # Truyền đường dẫn include cho quá trình biên dịch nhân
-        KCPPFLAGS="-I${KERNEL_DIR}/arch/arm64/include -I${KERNEL_DIR}/arch/arm64/include/uapi -I${OUT_DIR}/arch/arm64/include/generated/uapi -I${KERNEL_DIR}/include -I${KERNEL_DIR}/include/uapi -I${OUT_DIR}/include/generated/uapi"
     )
-
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
