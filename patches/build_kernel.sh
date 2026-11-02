@@ -351,11 +351,14 @@ build_target_os() {
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
+        CLANG_TRIPLE="aarch64-linux-gnu-"
+        LD="ld.lld"
         AR="llvm-ar"
         NM="llvm-nm"
         OBJCOPY="llvm-objcopy"
         OBJDUMP="llvm-objdump"
         STRIP="llvm-strip"
+        HOSTCFLAGS="-I${KERNEL_DIR}/arch/arm64/include -I${KERNEL_DIR}/arch/arm64/include/uapi -I${OUT_DIR}/arch/arm64/include/generated/uapi -I${KERNEL_DIR}/include -I${KERNEL_DIR}/include/uapi -I${OUT_DIR}/include/generated/uapi"
     )
 
     echo ""
