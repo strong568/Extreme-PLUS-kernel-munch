@@ -104,15 +104,15 @@ CONFIG_NET_SCH_FQ_CODEL=y
 EOF
 
 # ------------------------------------------
-# 3. KernelSU (RKSU / BakaSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup Function
+# 3. KernelSU (RKSU / ReSukiSU Multi-Manager Non-GKI 4.19 with SuSFS v2.3.0) Setup Function
 # ------------------------------------------
 inject_ksu_susfs() {
     if [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ]; then
-        echo "[*] BakaSU source already present, skipping re-injection..."
+        echo "[*] ReSukiSU source already present, skipping re-injection..."
         return 0
     fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "⚡ Injecting BakaSU / KowSU Multi-Manager & SuSFS v2.3.0 Source..."
+    echo "⚡ Injecting ReSukiSU / KowSU Multi-Manager & SuSFS v2.3.0 Source..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
 
@@ -135,7 +135,7 @@ if apk_sign_path:
         content = f.read()
 
     hook_target = "return check_v2_signature(path, signature_index);"
-    hook_replacement = r"""// Bulletproof Fallback: check known manager package names
+    hook_replacement = """// Bulletproof Fallback: check known manager package names
     if (check_v2_signature(path, signature_index))
         return true;
     char pkg_buf[128];
@@ -145,17 +145,12 @@ if apk_sign_path:
             !strcmp(pkg_buf, "org.bakasu.bakasu") ||
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
-            !strcmp(pkg_buf, "com.midori.supermanager") ||
-            !strcmp(pkg_buf, "me.yuki.finasu") ||
-            !strcmp(pkg_buf, "io.github.lyravoid.finasu") ||
-            !strcmp(pkg_buf, "org.finasu") ||
             !strcmp(pkg_buf, "com.resukisu")) {
-            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\n", pkg_buf);
+            pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
             *signature_index = 0;
             return true;
         }
     }
-
     return false;"""
     if hook_target in content and "pkg_buf" not in content:
         content = content.replace(hook_target, hook_replacement)
@@ -170,7 +165,7 @@ if apk_sign_path:
     echo "CONFIG_KSU_SUSFS=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "arch/arm64/configs/${DEFCONFIG}"
     echo "CONFIG_THREAD_INFO_IN_TASK=y" >> "arch/arm64/configs/${DEFCONFIG}"
-    echo "[+] RKSU / BakaSU Multi-Manager Non-GKI setup finished."
+    echo "[+] RKSU / ReSukiSU Multi-Manager Non-GKI setup finished."
 }
 
 # ------------------------------------------
@@ -330,35 +325,27 @@ build_target_os() {
     if [ "$ROOT_TYPE" == "1" ] || [ "$ROOT_TYPE" == "ksu_susfs" ]; then
         ENABLE_KSU=1
         ENABLE_SUSFS=1
-        ROOT_LABEL="BakaSU + SuSFS v2.3.0"
-        ROOT_BANNER="BakaSU + SuSFS v2.3.0 (Multi-Manager)"
-        ZIP_SUFFIX="BakaSU_SuSFS"
+        ROOT_LABEL="KowSU + SuSFS v2.3.0"
+        ROOT_BANNER="KowSU + SuSFS v2.3.0 (Multi-Manager)"
+        ZIP_SUFFIX="KowSU_SuSFS"
     elif [ "$ROOT_TYPE" == "2" ] || [ "$ROOT_TYPE" == "ksu_no_susfs" ]; then
         ENABLE_KSU=1
         ENABLE_SUSFS=0
-        ROOT_LABEL="BakaSU Multi-Manager (No SuSFS)"
-        ROOT_BANNER="BakaSU Multi-Manager (Clean / No SuSFS)"
-        ZIP_SUFFIX="BakaSU_NoSuSFS"
+        ROOT_LABEL="KowSU Multi-Manager (No SuSFS)"
+        ROOT_BANNER="KowSU Multi-Manager (Clean / No SuSFS)"
+        ZIP_SUFFIX="KowSU_NoSuSFS"
     fi
     local OUT_DIR="${KERNEL_DIR}/out_${OS}"
-    
-    # [FIX]: Sử dụng CC cờ '-target' cho CLANG thay vì cấu hình biến môi trường rác
     local MAKE_OPTS=(
         O="${OUT_DIR}"
         ARCH="${ARCH}"
         SUBARCH="${SUBARCH}"
         LLVM=1
         LLVM_IAS=1
-        CC="ccache clang -target aarch64-linux-gnu"
+        CC="ccache clang"
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
-        LD="ld.lld"
-        AR="llvm-ar"
-        NM="llvm-nm"
-        OBJCOPY="llvm-objcopy"
-        OBJDUMP="llvm-objdump"
-        STRIP="llvm-strip"
     )
 
     echo ""
@@ -429,7 +416,7 @@ build_target_os() {
     # 6. Root Configuration (ksu_susfs vs ksu_no_susfs vs noroot)
     if [ "$ENABLE_KSU" -eq 1 ]; then
         if [ "$ENABLE_SUSFS" -eq 1 ]; then
-            echo "[*] Injecting Full RKSU / BakaSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
+            echo "[*] Injecting Full RKSU / KowSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
             scripts/config --file "${OUT_DIR}/.config" \
                 -e KSU \
                 -e KSU_SUSFS \
@@ -449,7 +436,7 @@ build_target_os() {
                 -d KSU_DISABLE_MANAGER \
                 -d KSU_DISABLE_POLICY
         else
-            echo "[*] Injecting BakaSU Multi-Manager (Standard / No SuSFS Features) Configuration into ${OS_UPPER} .config..."
+            echo "[*] Injecting KowSU Multi-Manager (Standard / No SuSFS Features) Configuration into ${OS_UPPER} .config..."
             scripts/config --file "${OUT_DIR}/.config" \
                 -e KSU \
                 -e KSU_SUSFS \
@@ -572,15 +559,19 @@ build_target_os() {
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
 
-    # 8. Compile Master Kernel Image, DTB Table & DTBO
-    echo "[*] Compiling ${OS_UPPER} Master Kernel Image, DTB Table & DTBO..."
-    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image dtbs dtbo.img dtb
+    # 8. Compile Master DTB Table & DTBO
+    echo "[*] Compiling ${OS_UPPER} Master DTB Table & DTBO Image..."
+    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
+
+    # 9. Compile Master Kernel Image
+    echo "[*] Compiling ${OS_UPPER} Master Kernel Image (3.19 GHz Monster Peak)..."
+    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
 
     if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
         echo "❌ [ERROR] ${OS_UPPER} Master Kernel Image did NOT compile!"
         exit 1
     fi
-    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully (\$(du -h \"\${OUT_DIR}/arch/arm64/boot/Image\" | cut -f1))"
+    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully ($(du -h "${OUT_DIR}/arch/arm64/boot/Image" | cut -f1))"
 
     # 10. AnyKernel3 Packaging for Target
     local AK_DIR="${KERNEL_DIR}/anykernel_${OS}"
@@ -754,7 +745,7 @@ if [ "$ROOT_MODE" == "noroot" ]; then
         build_target_os "aosp" 0
     fi
 elif [ "$ROOT_MODE" == "ksu_no_susfs" ]; then
-    echo "[*] Executing BakaSU Multi-Manager (Standard / No SuSFS) Build..."
+    echo "[*] Executing KowSU Multi-Manager (Standard / No SuSFS) Build..."
     inject_ksu_susfs
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
         build_target_os "hyperos" 2
@@ -763,7 +754,7 @@ elif [ "$ROOT_MODE" == "ksu_no_susfs" ]; then
         build_target_os "aosp" 2
     fi
 elif [ "$ROOT_MODE" == "ksu_susfs" ]; then
-    echo "[*] Executing BakaSU + SuSFS v2.3.0 Root Build..."
+    echo "[*] Executing KowSU + SuSFS v2.3.0 Root Build..."
     inject_ksu_susfs
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
         build_target_os "hyperos" 1
@@ -773,7 +764,7 @@ elif [ "$ROOT_MODE" == "ksu_susfs" ]; then
     fi
 elif [ "$ROOT_MODE" == "both" ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 DUAL BUILD REQUESTED: Compiling Pure Clean & BakaSU + SuSFS!"
+    echo "🚀 DUAL BUILD REQUESTED: Compiling Pure Clean & KowSU + SuSFS!"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
@@ -793,8 +784,8 @@ elif [ "$ROOT_MODE" == "all" ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "🚀 COMPLETE SUITE REQUESTED: Compiling ALL 3 Root Variants!"
     echo "   1. Pure Clean Base (No Root)"
-    echo "   2. BakaSU Multi-Manager (Standard / No SuSFS)"
-    echo "   3. BakaSU Multi-Manager + SuSFS v2.3.0"
+    echo "   2. KowSU Multi-Manager (Standard / No SuSFS)"
+    echo "   3. KowSU Multi-Manager + SuSFS v2.3.0"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
