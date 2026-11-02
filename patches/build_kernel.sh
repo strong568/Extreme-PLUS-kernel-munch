@@ -351,18 +351,12 @@ build_target_os() {
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
-        CLANG_TRIPLE="aarch64-linux-gnu-"
-        KCFLAGS="-D__ANDROID__"
-        HOSTCFLAGS="-D__ANDROID__"
-        LD="ld.lld"
         AR="llvm-ar"
         NM="llvm-nm"
         OBJCOPY="llvm-objcopy"
         OBJDUMP="llvm-objdump"
-        READELF="llvm-readelf"
         STRIP="llvm-strip"
     )
-
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -583,18 +577,7 @@ build_target_os() {
         echo "❌ [ERROR] ${OS_UPPER} Master Kernel Image did NOT compile!"
         exit 1
     fi
-    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully ($(du -h "${OUT_DIR}/arch/arm64/boot/Image" | cut -f1))"
-
-
-    # 9. Compile Master Kernel Image
-    echo "[*] Compiling ${OS_UPPER} Master Kernel Image (3.19 GHz Monster Peak)..."
-    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image
-
-    if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
-        echo "❌ [ERROR] ${OS_UPPER} Master Kernel Image did NOT compile!"
-        exit 1
-    fi
-    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully ($(du -h "${OUT_DIR}/arch/arm64/boot/Image" | cut -f1))"
+    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully (\$(du -h \"\${OUT_DIR}/arch/arm64/boot/Image\" | cut -f1))"
 
     # 10. AnyKernel3 Packaging for Target
     local AK_DIR="${KERNEL_DIR}/anykernel_${OS}"
