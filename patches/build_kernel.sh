@@ -352,7 +352,17 @@ build_target_os() {
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
         CLANG_TRIPLE="aarch64-linux-gnu-"
+        KCFLAGS="-D__ANDROID__"
+        HOSTCFLAGS="-D__ANDROID__"
+        LD="ld.lld"
+        AR="llvm-ar"
+        NM="llvm-nm"
+        OBJCOPY="llvm-objcopy"
+        OBJDUMP="llvm-objdump"
+        READELF="llvm-readelf"
+        STRIP="llvm-strip"
     )
+
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
