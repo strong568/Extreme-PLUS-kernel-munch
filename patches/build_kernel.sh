@@ -358,8 +358,10 @@ build_target_os() {
         OBJCOPY="llvm-objcopy"
         OBJDUMP="llvm-objdump"
         STRIP="llvm-strip"
-        HOSTCFLAGS="-I${KERNEL_DIR}/arch/arm64/include -I${KERNEL_DIR}/arch/arm64/include/uapi -I${OUT_DIR}/arch/arm64/include/generated/uapi -I${KERNEL_DIR}/include -I${KERNEL_DIR}/include/uapi -I${OUT_DIR}/include/generated/uapi"
+        # Truyền đường dẫn include cho quá trình biên dịch nhân
+        KCPPFLAGS="-I${KERNEL_DIR}/arch/arm64/include -I${KERNEL_DIR}/arch/arm64/include/uapi -I${OUT_DIR}/arch/arm64/include/generated/uapi -I${KERNEL_DIR}/include -I${KERNEL_DIR}/include/uapi -I${OUT_DIR}/include/generated/uapi"
     )
+
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
