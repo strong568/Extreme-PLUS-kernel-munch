@@ -351,6 +351,7 @@ build_target_os() {
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
+        CLANG_TRIPLE="aarch64-linux-gnu-"
     )
 
     echo ""
@@ -564,9 +565,16 @@ build_target_os() {
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
 
-    # 8. Compile Master DTB Table & DTBO
-    echo "[*] Compiling ${OS_UPPER} Master DTB Table & DTBO Image..."
-    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" dtbs dtbo.img dtb
+    # 8. Compile Master Kernel Image, DTB Table & DTBO
+    echo "[*] Compiling ${OS_UPPER} Master Kernel Image, DTB Table & DTBO..."
+    make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" Image dtbs dtbo.img dtb
+
+    if [ ! -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
+        echo "❌ [ERROR] ${OS_UPPER} Master Kernel Image did NOT compile!"
+        exit 1
+    fi
+    echo "✅ [SUCCESS] ${OS_UPPER} Image compiled successfully ($(du -h "${OUT_DIR}/arch/arm64/boot/Image" | cut -f1))"
+
 
     # 9. Compile Master Kernel Image
     echo "[*] Compiling ${OS_UPPER} Master Kernel Image (3.19 GHz Monster Peak)..."
