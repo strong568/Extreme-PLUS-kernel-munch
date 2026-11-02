@@ -232,18 +232,20 @@ jobs:
           }
 
           fetch_bakasu_all_actions() {
-            echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success only)..."
+            echo "[*] Fetching Actions Runs from Baka-SU/BakaSU (Success & Main branch only)..."
             local BAKA_RUNS_JSON
+            # Thêm tham số branch=main để chỉ lấy nhánh chính thống
             BAKA_RUNS_JSON=$(curl -sL \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&per_page=30")
+              "https://api.github.com/repos/Baka-SU/BakaSU/actions/runs?status=completed&conclusion=success&branch=main&per_page=30")
 
             local FOUND_BAKA=0
             local FOUND_RESUKI=0
             local FOUND_SPOOFED=0
 
-            for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]?.id'); do
+            # Dùng jq lọc thêm một lần nữa để vứt bỏ các event pull_request
+            for RUN_ID in $(echo "$BAKA_RUNS_JSON" | jq -r '.workflow_runs[]? | select(.event != "pull_request") | .id'); do
               [ "$FOUND_BAKA" -eq 1 ] && [ "$FOUND_RESUKI" -eq 1 ] && [ "$FOUND_SPOOFED" -eq 1 ] && break
               [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ] && continue
               
@@ -287,10 +289,11 @@ jobs:
                   mkdir -p "$TMP_DIR"
                   unzip -q -o "$TMP_ZIP" -d "$TMP_DIR/"
 
+                  # Thêm bộ lọc grep -v -i "\.pr" để loại trừ mọi file APK của Pull Request
                   local TARGET_APK
-                  TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -i "arm64-v8a-release" | head -n 1)
-                  [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -i "arm64.*release" | head -n 1)
-                  [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | head -n 1)
+                  TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -v -i "\.pr" | grep -i "arm64-v8a-release" | head -n 1)
+                  [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -v -i "\.pr" | grep -i "arm64.*release" | head -n 1)
+                  [ -z "$TARGET_APK" ] && TARGET_APK=$(find "$TMP_DIR" -type f -name "*.apk" | grep -v -i "debug" | grep -v -i "\.pr" | head -n 1)
                   
                   if [ -n "$TARGET_APK" ]; then
                     local RAW_NAME=$(basename "$TARGET_APK")
@@ -323,7 +326,6 @@ jobs:
               done
             done
           }
-
 
           fetch_generic_action_apk() {
             local REPO="$1"
