@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       patches_branch:
-        description: 'Branch chứa thư mục patches (Mặc định: bmw_ResukiSU_Susfs_noSusfs | Gợi ý: main hay bmw_BakaSU cũng chạy tốt)'
+        description: 'Branch chứa thư mục patches (Mặc định: bmw_HyperSU | Gợi ý: main hay bmw_BakaSU cũng chạy tốt)'
         required: true
         type: string
-        default: 'bmw_ResukiSU_Susfs_noSusfs'
+        default: 'bmw_HyperSU'
       root_mode:
         description: 'Root Variant: ksu_susfs (SuSFS) | ksu_no_susfs (Standard KSU) | noroot (Pure Clean) | all | both'
         required: true
@@ -46,7 +46,7 @@ jobs:
       - name: "📦 Checkout config & patches repo"
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.patches_branch || 'bmw_ResukiSU_Susfs_noSusfs' }}
+          ref: ${{ inputs.patches_branch || 'bmw_HyperSU' }}
 
       - name: "🛠️ Install build dependencies"
         run: |
@@ -62,11 +62,11 @@ jobs:
 
       - name: "🌐 Clone kernel source"
         run: |
-          git clone --depth=1 -b android17-aptusitu https://github.com/AstideLabs/android_kernel_xiaomi_sm8250 kernel
+          git clone --depth=1 -b HyperSU https://github.com/KirinNova/android_kernel_xiaomi_sm8250 kernel
 
       - name: "⚙️ Inject Build Script & Configure SuSFS Version Naming"
         run: |
-          PATCH_BRANCH="${{ inputs.patches_branch || 'bmw_ResukiSU_Susfs_noSusfs' }}"
+          PATCH_BRANCH="${{ inputs.patches_branch || 'bmw_HyperSU' }}"
           cp patches/* kernel/
           chmod +x kernel/build_kernel.sh
 
@@ -75,7 +75,7 @@ jobs:
             SUSFS_VER=$(grep -oP 'SuSFS \Kv[0-9]+\.[0-9]+\.[0-9]+' kernel/build_kernel.sh | head -n 1 || echo "v2.3.0")
           fi
 
-          sed -i "s/ZIP_SUFFIX=\"KowSU_SuSFS\"/ZIP_SUFFIX=\"KowSU_SuSFS_${SUSFS_VER}\"/g" kernel/build_kernel.sh
+          sed -i "s/ZIP_SUFFIX=\"HyperSU_SuSFS\"/ZIP_SUFFIX=\"HyperSU_SuSFS_${SUSFS_VER}\"/g" kernel/build_kernel.sh
 
           if [[ "${{ inputs.root_mode }}" == "ksu_susfs" || "${{ inputs.root_mode }}" == "both" || "${{ inputs.root_mode }}" == "all" ]]; then
             VARIANT_TAG="${{ inputs.root_mode }}_SuSFS_${SUSFS_VER}"
@@ -170,6 +170,7 @@ jobs:
             "SukiSU-Ultra/SukiSU-Ultra"
             "backslashxx/KernelSU"
             "KernelSU-Next/KernelSU-Next"
+            "HyperSU-Team/HyperSU"
             "midori01/KernelSU"
             "LyraVoid/FinaSU"
           )
