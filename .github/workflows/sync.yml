@@ -1,6 +1,11 @@
 name: Sync Fork (Keep My Changes)
 
 on:
+  schedule:
+    # Chạy vào 00:00 Chủ Nhật hàng tuần (giờ UTC) - tương đương 07:00 sáng giờ Việt Nam
+    - cron: '0 0 * * 0'
+     # - cron: '0 0 */3 * *' 3 ngày chạy 1 lần
+        
   workflow_dispatch:
     inputs:
       branch_name:
