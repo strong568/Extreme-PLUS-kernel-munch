@@ -112,9 +112,9 @@ inject_ksu_susfs() {
         return 0
     fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "⚡ Injecting ReSukiSU / KowSU Multi-Manager & SuSFS v2.3.0 Source..."
+    echo "⚡ Injecting ReSukiSU / HyperSU Multi-Manager & SuSFS v2.3.0 Source..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s -- v4.2.0-rc3
+    curl -LSs "https://raw.githubusercontent.com/HyperSU-Team/HyperSU/refs/heads/main/kernel/setup.sh" | bash -s -- main
 
     if [ -f "drivers/kernelsu/Kconfig" ]; then
         sed -i 's/default KSU_TRACEPOINT_HOOK/default KSU_SUSFS/' drivers/kernelsu/Kconfig
@@ -145,6 +145,7 @@ if apk_sign_path:
             !strcmp(pkg_buf, "org.bakasu.bakasu") ||
             !strcmp(pkg_buf, "com.sukisu.ultra") ||
             !strcmp(pkg_buf, "com.kowx712.supermanager") ||
+            !strcmp(pkg_buf, "com.hypersu.manager") ||
             !strcmp(pkg_buf, "com.resukisu")) {
             pr_info("PROJECT EXTREME+: Manager recognized by known package name: %s\\n", pkg_buf);
             *signature_index = 0;
@@ -325,15 +326,15 @@ build_target_os() {
     if [ "$ROOT_TYPE" == "1" ] || [ "$ROOT_TYPE" == "ksu_susfs" ]; then
         ENABLE_KSU=1
         ENABLE_SUSFS=1
-        ROOT_LABEL="KowSU + SuSFS v2.3.0"
-        ROOT_BANNER="KowSU + SuSFS v2.3.0 (Multi-Manager)"
-        ZIP_SUFFIX="KowSU_SuSFS"
+        ROOT_LABEL="HyperSU + SuSFS v2.3.0"
+        ROOT_BANNER="HyperSU + SuSFS v2.3.0 (Multi-Manager)"
+        ZIP_SUFFIX="HyperSU_SuSFS"
     elif [ "$ROOT_TYPE" == "2" ] || [ "$ROOT_TYPE" == "ksu_no_susfs" ]; then
         ENABLE_KSU=1
         ENABLE_SUSFS=0
-        ROOT_LABEL="KowSU Multi-Manager (No SuSFS)"
-        ROOT_BANNER="KowSU Multi-Manager (Clean / No SuSFS)"
-        ZIP_SUFFIX="KowSU_NoSuSFS"
+        ROOT_LABEL="HyperSU Multi-Manager (No SuSFS)"
+        ROOT_BANNER="HyperSU Multi-Manager (Clean / No SuSFS)"
+        ZIP_SUFFIX="HyperSU_NoSuSFS"
     fi
     local OUT_DIR="${KERNEL_DIR}/out_${OS}"
     local MAKE_OPTS=(
@@ -416,7 +417,7 @@ build_target_os() {
     # 6. Root Configuration (ksu_susfs vs ksu_no_susfs vs noroot)
     if [ "$ENABLE_KSU" -eq 1 ]; then
         if [ "$ENABLE_SUSFS" -eq 1 ]; then
-            echo "[*] Injecting Full RKSU / KowSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
+            echo "[*] Injecting Full RKSU / HyperSU + SuSFS v2.3.0 Configuration into ${OS_UPPER} .config..."
             scripts/config --file "${OUT_DIR}/.config" \
                 -e KSU \
                 -e KSU_SUSFS \
@@ -436,7 +437,7 @@ build_target_os() {
                 -d KSU_DISABLE_MANAGER \
                 -d KSU_DISABLE_POLICY
         else
-            echo "[*] Injecting KowSU Multi-Manager (Standard / No SuSFS Features) Configuration into ${OS_UPPER} .config..."
+            echo "[*] Injecting HyperSU Multi-Manager (Standard / No SuSFS Features) Configuration into ${OS_UPPER} .config..."
             scripts/config --file "${OUT_DIR}/.config" \
                 -e KSU \
                 -e KSU_SUSFS \
@@ -745,7 +746,7 @@ if [ "$ROOT_MODE" == "noroot" ]; then
         build_target_os "aosp" 0
     fi
 elif [ "$ROOT_MODE" == "ksu_no_susfs" ]; then
-    echo "[*] Executing KowSU Multi-Manager (Standard / No SuSFS) Build..."
+    echo "[*] Executing HyperSU Multi-Manager (Standard / No SuSFS) Build..."
     inject_ksu_susfs
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
         build_target_os "hyperos" 2
@@ -754,7 +755,7 @@ elif [ "$ROOT_MODE" == "ksu_no_susfs" ]; then
         build_target_os "aosp" 2
     fi
 elif [ "$ROOT_MODE" == "ksu_susfs" ]; then
-    echo "[*] Executing KowSU + SuSFS v2.3.0 Root Build..."
+    echo "[*] Executing HyperSU + SuSFS v2.3.0 Root Build..."
     inject_ksu_susfs
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
         build_target_os "hyperos" 1
@@ -764,7 +765,7 @@ elif [ "$ROOT_MODE" == "ksu_susfs" ]; then
     fi
 elif [ "$ROOT_MODE" == "both" ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🚀 DUAL BUILD REQUESTED: Compiling Pure Clean & KowSU + SuSFS!"
+    echo "🚀 DUAL BUILD REQUESTED: Compiling Pure Clean & HyperSU + SuSFS!"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
@@ -784,8 +785,8 @@ elif [ "$ROOT_MODE" == "all" ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "🚀 COMPLETE SUITE REQUESTED: Compiling ALL 3 Root Variants!"
     echo "   1. Pure Clean Base (No Root)"
-    echo "   2. KowSU Multi-Manager (Standard / No SuSFS)"
-    echo "   3. KowSU Multi-Manager + SuSFS v2.3.0"
+    echo "   2. HyperSU Multi-Manager (Standard / No SuSFS)"
+    echo "   3. HyperSU Multi-Manager + SuSFS v2.3.0"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     sed -i '/CONFIG_KSU/d' "arch/arm64/configs/${DEFCONFIG}" 2>/dev/null || true
     if [ "$TARGET_OS" == "hyperos" ] || [ "$TARGET_OS" == "both" ]; then
