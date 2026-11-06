@@ -66,13 +66,26 @@ jobs:
             echo "[+] Cloned android17-aptusitu branch"
           else
             echo "[*] Falling back to verified SuSFS v2.3.0 tree (refs/pull/74/merge)..."
-            mkdir kernel && cd kernel
+            mkdir -p kernel && cd kernel
             git init
             git remote add origin https://github.com/AstideLabs/android_kernel_xiaomi_sm8250
-            git fetch --depth=1 origin refs/pull/74/merge
-            git checkout FETCH_HEAD
-            cd ..
+            if git fetch --depth=1 origin refs/pull/74/merge 2>/dev/null; then
+              git checkout FETCH_HEAD
+              cd ..
+              echo "[+] Cloned PR 74 merge"
+            else
+              cd ..
+              rm -rf kernel
+              echo "[*] PR 74 failed. Falling back to strong568 APTKernel..."
+              if git clone --depth=1 -b Extreme_AstideLabs_Susfs_2.3.0 https://github.com/strong568/APTKernel_android_kernel_xiaomi_sm8250 kernel; then
+                echo "[+] Cloned strong568 fallback branch"
+              else
+                echo "[-] All clone attempts failed!"
+                exit 1
+              fi
+            fi
           fi
+
           
       - name: "⚙️ Inject Build Script & Configure SuSFS Version Naming"
         run: |
