@@ -35,7 +35,7 @@ jobs:
           # Dùng giá trị nhập tay, nếu chạy tự động (schedule) sẽ lấy 'main'
           ref: ${{ github.event.inputs.branch_name || 'main' }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }} # Đã đổi sang sử dụng GH_PAT
 
       - name: Configure git identity
         run: |
@@ -44,15 +44,15 @@ jobs:
 
       - name: Add upstream remote
         run: |
-          git remote add upstream ${{ github.event.inputs.upstream_repo }}
+          git remote add upstream ${{ github.event.inputs.upstream_repo || 'https://github.com/PandeyJI-9/Extreme-PLUS-kernel-munch.git' }}
           git remote -v
 
       - name: Fetch upstream
-        run: git fetch upstream ${{ github.event.inputs.upstream_branch }}
+        run: git fetch upstream ${{ github.event.inputs.upstream_branch || 'main' }}
 
       - name: Merge upstream with "ours" strategy (keep my changes)
         run: |
-          git merge upstream/${{ github.event.inputs.upstream_branch }} \
+          git merge upstream/${{ github.event.inputs.upstream_branch || 'main' }} \
             --allow-unrelated-histories \
             --no-edit \
             -X ours || true
@@ -65,4 +65,4 @@ jobs:
           fi
 
       - name: Push changes back
-        run: git push origin ${{ github.event.inputs.branch_name }}
+        run: git push origin ${{ github.event.inputs.branch_name || 'main' }}
