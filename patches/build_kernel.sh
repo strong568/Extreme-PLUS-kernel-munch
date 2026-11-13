@@ -76,17 +76,9 @@ echo "[*] Cleaning previous temporary outputs..."
 rm -rf out out_hyperos out_aosp anykernel anykernel_* EXTREME++*.zip
 find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -delete
 
-# Fast ZRAM LZ4 (Zero CPU Overhead), EXTREME+ Governor & GPU Devfreq base symbols
-sed -i 's/CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' "arch/arm64/configs/${DEFCONFIG}"
-grep -q "CONFIG_ZRAM_DEF_COMP_LZ4=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
-CONFIG_CRYPTO_LZ4=y
-CONFIG_LZ4_COMPRESS=y
-CONFIG_LZ4_DECOMPRESS=y
-CONFIG_ZRAM_DEF_COMP_LZ4=y
-CONFIG_ZRAM_DEF_COMP="lz4"
-CONFIG_CRYPTO_ZSTD=y
-CONFIG_ZSTD_COMPRESS=y
-CONFIG_ZSTD_DECOMPRESS=y
+# EXTREME+ Governor & GPU Devfreq base symbols.
+# ZRAM/swap stay at the stock AstideLabs configuration (LZ4 default).
+cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
 CONFIG_PM_DEVFREQ=y
 CONFIG_DEVFREQ_GOV_QCOM_ADRENO_TZ=y
 CONFIG_DEVFREQ_GOV_QCOM_GPUBW_MON=y
@@ -185,9 +177,9 @@ EOF
 echo "[+] kona-v2.1-gpu.dtsi set to pure FakeDreamer chipid override"
 
 # ------------------------------------------
-# 5. Inject Custom EXTREME+ Governor (Zero-Latency & Anti-Choke)
+# 5. Inject EXTREME+ Governor (Stock schedutil + EKM profiles)
 # ------------------------------------------
-echo "[*] Injecting Custom EXTREME+ Governor into kernel/sched/..."
+echo "[*] Injecting stock-schedutil-based EXTREME+ Governor into kernel/sched/..."
 if [ -f "cpufreq_extreme_plus.c" ]; then
     cp -f cpufreq_extreme_plus.c kernel/sched/cpufreq_extreme_plus.c
     echo "[+] Copied cpufreq_extreme_plus.c to kernel/sched/"
@@ -209,18 +201,21 @@ gov_choice = """config CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
 \tselect CPU_FREQ_GOV_EXTREME_PLUS
 \tselect CPU_FREQ_GOV_PERFORMANCE
 \thelp
-\t  Use the "extreme+" CPUFreq governor by default. Zero latency,
-\t  anti-100% prime choke, active frame pacing floor for sustained hardcore gaming.
+\t  Use the "extreme+" CPUFreq governor by default. It keeps the
+\t  AstideLabs CAF/WALT schedutil algorithm and adds the EKM profile
+\t  ceiling to all three clusters.
 """
 
 gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
 \tbool "\x27extreme+\x27 cpufreq policy governor"
 \tdepends on CPU_FREQ && SMP
+\tselect CPU_FREQ_GOV_SCHEDUTIL
 \tselect CPU_FREQ_GOV_ATTR_SET
 \tselect IRQ_WORK
 \thelp
-\t  EXTREME+ governor based on scheduler utilization with active task
-\t  frame pacing floor, zero latency up-scaling, and 60ms decay window.
+\t  Stock AstideLabs CAF/WALT schedutil algorithm with an EKM profile
+\t  layer. Little, Gold and Prime all scale with stock schedutil;
+\t  the selected profile only limits the maximum frequency.
 """
 
 if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
@@ -232,6 +227,17 @@ if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
 else:
     print("ℹ️ EXTREME+ governor already in drivers/cpufreq/Kconfig")
 '
+
+# ------------------------------------------
+# 5b. ZRAM ZSTD level 3
+# ------------------------------------------
+echo "[*] Switching ZRAM to ZSTD level 3 (LZO remains as vendor-ABI fallback)..."
+if [ -f "apply-zram-zstd.py" ]; then
+    python3 apply-zram-zstd.py
+else
+    echo "❌ [ERROR] apply-zram-zstd.py is missing."
+    exit 1
+fi
 
 # ------------------------------------------
 # 6. Apply Performance, EAS, Charging & VM Patches
@@ -264,11 +270,6 @@ fi
 if [ -f "apply-millet-compat.py" ]; then
     echo "[*] Applying Xiaomi HyperOS 4 / MIUI Universal Millet Dual-ABI Compatibility Patch..."
     python3 apply-millet-compat.py . || echo "⚠️ Millet patch skipped"
-fi
-
-if [ -f "kernel/sched/cpufreq_schedutil.c" ]; then
-    sed -i 's/tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;/tunables->up_rate_limit_us = 0;/' kernel/sched/cpufreq_schedutil.c
-    echo "[+] Schedutil up_rate_limit_us set to 0 in kernel/sched/cpufreq_schedutil.c for lightning boot"
 fi
 
 # Hardening fs/susfs.c against Clang -Wunused-variable / -Wunused-function when features are disabled
@@ -376,24 +377,27 @@ build_target_os() {
         -e QCOM_KGSL_IOMMU \
         --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz"
 
-    # 3. ZRAM Fast LZ4 Default Memory Compression (Instant Zero-Latency Decompress)
+    # 3. ZRAM/swap: ZSTD level 3 is the default. LZO/LZO-RLE stay
+    #    compiled only as vendor-module ABI fallbacks, never as the default.
     scripts/config --file "${OUT_DIR}/.config" \
         -e ZRAM \
-        -e CRYPTO_LZ4 \
-        -e LZ4_COMPRESS \
-        -e LZ4_DECOMPRESS \
-        -e ZRAM_DEF_COMP_LZ4 \
-        -d ZRAM_DEF_COMP_ZSTD \
-        --set-str ZRAM_DEF_COMP "lz4" \
         -e CRYPTO_ZSTD \
+        -e ZSTD_COMMON \
         -e ZSTD_COMPRESS \
-        -e ZSTD_DECOMPRESS
+        -e ZSTD_DECOMPRESS \
+        -e ZRAM_DEF_COMP_ZSTD \
+        -d ZRAM_DEF_COMP_LZO \
+        -d ZRAM_DEF_COMP_LZORLE \
+        -d ZRAM_DEF_COMP_LZ4 \
+        -d ZRAM_DEF_COMP_LZ4HC \
+        -d ZRAM_DEF_COMP_842
 
-    # 4. Ultra-Fast & Safe Boot (Zero-Latency EXTREME+ Governor)
+    # 4. Stock AstideLabs schedutil + EKM profile layer
     scripts/config --file "${OUT_DIR}/.config" \
         -e CPU_FREQ_GOV_SCHEDUTIL \
         -e CPU_FREQ_GOV_EXTREME_PLUS \
         -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
+        -d CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
         -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
         --set-str CPU_FREQ_DEFAULT_GOV "extreme+"
 
@@ -558,6 +562,39 @@ build_target_os() {
     scripts/config --file "${OUT_DIR}/.config" --set-str LOCALVERSION "${LOCALVER}"
     rm -f "${OUT_DIR}/include/config/kernel.release"
     make -j"${TOTAL_CORES}" "${MAKE_OPTS[@]}" olddefconfig
+
+    # ZRAM must use ZSTD, not the legacy LZO/LZO-RLE default. LZO symbols
+    # remain available only for stock vendor-module ABI compatibility.
+    if ! grep -q '^CONFIG_ZRAM=y' "${OUT_DIR}/.config" ||
+       ! grep -q '^CONFIG_CRYPTO_ZSTD=y' "${OUT_DIR}/.config" ||
+       ! grep -q '^CONFIG_ZSTD_COMPRESS=y' "${OUT_DIR}/.config" ||
+       ! grep -q '^CONFIG_ZSTD_DECOMPRESS=y' "${OUT_DIR}/.config" ||
+       ! grep -q '^CONFIG_ZRAM_DEF_COMP_ZSTD=y' "${OUT_DIR}/.config"; then
+        echo "❌ [ERROR] ZSTD ZRAM support was not enabled."
+        grep '^CONFIG_\(CRYPTO_ZSTD\|ZSTD_\|ZRAM_DEF_COMP\)' "${OUT_DIR}/.config" || true
+        exit 1
+    fi
+    if grep -q '^CONFIG_ZRAM_DEF_COMP_\(LZO\|LZORLE\|LZ4\|LZ4HC\|842\)=y' "${OUT_DIR}/.config"; then
+        echo "❌ [ERROR] A legacy ZRAM compressor is still selected as default."
+        grep '^CONFIG_ZRAM_DEF_COMP' "${OUT_DIR}/.config" || true
+        exit 1
+    fi
+    if ! grep -q 'compression_level' crypto/zstd.c ||
+       ! grep -q 'ZSTD_MAX_SAFE_LEVEL' crypto/zstd.c ||
+       ! grep -q 'ZSTD_DEF_LEVEL[[:space:]]*3' crypto/zstd.c; then
+        echo "❌ [ERROR] ZSTD level-3 tunable or max-level workspace guard was not applied."
+        exit 1
+    fi
+
+    # EXTREME+ must always be the active default governor on boot.
+    # 4.19 selects the default through this Kconfig choice; it does not
+    # define a CONFIG_CPU_FREQ_DEFAULT_GOV string.
+    if ! grep -q '^CONFIG_CPU_FREQ_GOV_EXTREME_PLUS=y' "${OUT_DIR}/.config" ||
+       ! grep -q '^CONFIG_CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS=y' "${OUT_DIR}/.config"; then
+        echo "❌ [ERROR] EXTREME+ is not configured as the active default governor on boot."
+        grep '^CONFIG_CPU_FREQ_DEFAULT_GOV' "${OUT_DIR}/.config" || true
+        exit 1
+    fi
 
     # 8. Compile Master DTB Table & DTBO
     echo "[*] Compiling ${OS_UPPER} Master DTB Table & DTBO Image..."
