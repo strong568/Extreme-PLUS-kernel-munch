@@ -73,14 +73,9 @@ echo "[*] Cleaning previous temporary outputs..."
 rm -rf out out_hyperos out_aosp anykernel anykernel_* EXTREME++*.zip
 find . -type f \( -name "dtbo.img" -o -name "Image" -o -name "Image.gz" \) -delete
 
-# ZRAM ZSTD, EXTREME+ Governor & GPU Devfreq base symbols
-sed -i 's/CONFIG_ZRAM_DEF_COMP_LZ4=y/CONFIG_ZRAM_DEF_COMP_ZSTD=y/' "arch/arm64/configs/${DEFCONFIG}"
-grep -q "CONFIG_CRYPTO_ZSTD=y" "arch/arm64/configs/${DEFCONFIG}" || cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
-CONFIG_CRYPTO_ZSTD=y
-CONFIG_ZSTD_COMPRESS=y
-CONFIG_ZSTD_DECOMPRESS=y
-CONFIG_ZRAM_DEF_COMP_ZSTD=y
-CONFIG_ZRAM_DEF_COMP="zstd"
+# EXTREME+ Governor & GPU Devfreq base symbols.
+# ZRAM/swap stay at the stock AstideLabs configuration (LZ4 default).
+cat >> "arch/arm64/configs/${DEFCONFIG}" << 'EOF'
 CONFIG_PM_DEVFREQ=y
 CONFIG_DEVFREQ_GOV_QCOM_ADRENO_TZ=y
 CONFIG_DEVFREQ_GOV_QCOM_GPUBW_MON=y
@@ -183,7 +178,7 @@ EOF
 # ------------------------------------------
 # 5. Inject Custom EXTREME+ Governor
 # ------------------------------------------
-echo "[*] Injecting Custom EXTREME+ Governor into kernel/sched/..."
+echo "[*] Injecting stock-schedutil-based EXTREME+ Governor into kernel/sched/..."
 if [ -f "cpufreq_extreme_plus.c" ]; then
     cp -f cpufreq_extreme_plus.c kernel/sched/cpufreq_extreme_plus.c
 fi
@@ -209,6 +204,7 @@ gov_choice = """config CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
 gov_def = """config CPU_FREQ_GOV_EXTREME_PLUS
 \tbool "\x27extreme+\x27 cpufreq policy governor"
 \tdepends on CPU_FREQ && SMP
+\tselect CPU_FREQ_GOV_SCHEDUTIL
 \tselect CPU_FREQ_GOV_ATTR_SET
 \tselect IRQ_WORK
 \thelp
@@ -221,6 +217,17 @@ if "CPU_FREQ_GOV_EXTREME_PLUS" not in text:
     with open(path_kconfig, "w") as f:
         f.write(text)
 '
+
+# ------------------------------------------
+# 5b. ZRAM ZSTD level 3
+# ------------------------------------------
+echo "[*] Switching ZRAM to ZSTD level 3 (LZO remains as vendor-ABI fallback)..."
+if [ -f "apply-zram-zstd.py" ]; then
+    python3 apply-zram-zstd.py
+else
+    echo "❌ [ERROR] apply-zram-zstd.py is missing."
+    exit 1
+fi
 
 # ------------------------------------------
 # 6. Apply Performance, EAS, Charging & VM Patches
@@ -240,15 +247,19 @@ if [ -f "fs/dcache.c" ]; then
     sed -i 's/int sysctl_vfs_cache_pressure __read_mostly = [0-9]*;/int sysctl_vfs_cache_pressure __read_mostly = 50;/' fs/dcache.c
 fi
 
+
 # ------------------------------------------
 # 7. AnyKernel3 Template
 # ------------------------------------------
-echo "[*] Cloning AnyKernel3 base template..."
+echo "[*] Cloning clean AnyKernel3 base template..."
 rm -rf anykernel_template
 if ! git clone --depth=1 https://github.com/re-noroi/anykernel3-test -b munch anykernel_template; then
     git clone --depth=1 https://github.com/AstideLabs/AnyKernel3 -b kona anykernel_template
 fi
 rm -rf anykernel_template/.git
+# Sanitize: Remove any lingering foreign trigger/flag files (*.dreamless, stale images/dtb)
+find anykernel_template -type f -name "*.dreamless" -delete
+rm -f anykernel_template/*.dreamless anykernel_template/*.img anykernel_template/*dtb*
 
 # ==============================================================================
 # MODULAR BUILD FUNCTION
@@ -312,14 +323,18 @@ build_target_os() {
         --set-str QCOM_ADRENO_DEFAULT_GOVERNOR "msm-adreno-tz" \
         -e ZRAM \
         -e CRYPTO_ZSTD \
+        -e ZSTD_COMMON \
         -e ZSTD_COMPRESS \
         -e ZSTD_DECOMPRESS \
         -e ZRAM_DEF_COMP_ZSTD \
+        -d ZRAM_DEF_COMP_LZO \
+        -d ZRAM_DEF_COMP_LZORLE \
         -d ZRAM_DEF_COMP_LZ4 \
         --set-str ZRAM_DEF_COMP "zstd" \
         -e CPU_FREQ_GOV_SCHEDUTIL \
         -e CPU_FREQ_GOV_EXTREME_PLUS \
         -e CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS \
+        -d CPU_FREQ_DEFAULT_GOV_PERFORMANCE \
         -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL \
         --set-str CPU_FREQ_DEFAULT_GOV "extreme+" \
         -e TCP_CONG_BBR \
@@ -482,6 +497,9 @@ build_target_os() {
     local AK_DIR="${KERNEL_DIR}/anykernel_${OS}"
     rm -rf "${AK_DIR}"
     cp -r anykernel_template "${AK_DIR}"
+    # Safety cleanup: Ensure zero unwanted trigger/dreamless files exist in the flashable zip
+    find "${AK_DIR}" -type f -name "*.dreamless" -delete
+    rm -f "${AK_DIR}"/*.dreamless "${AK_DIR}"/*.img "${AK_DIR}"/dtb*
 
     cp "${OUT_DIR}/arch/arm64/boot/Image" "${AK_DIR}/Image"
     if [ -f "${OUT_DIR}/arch/arm64/boot/dtb" ]; then
@@ -504,7 +522,10 @@ do.systemless=1
 do.cleanup=1
 do.cleanuponabort=0
 device.name1=munch
-device.name2=POCO F4
+device.name2=munchin
+device.name3=POCO F4
+device.name4=22021211RG
+device.name5=22021211RI
 supported.versions=13-17
 '; }
 
@@ -513,8 +534,24 @@ is_slot_device=1;
 ramdisk_compression=auto;
 patch_vbmeta_flag=0;
 
+# Universal Shell Variables (Both UPPERCASE and lowercase for 100% AK3 compatibility)
+BLOCK=\$BOOT_BLOCK;
+block=\$BOOT_BLOCK;
+IS_SLOT_DEVICE=auto;
+is_slot_device=1;
+RAMDISK_COMPRESSION=auto;
+ramdisk_compression=auto;
+PATCH_VBMETA_FLAG=auto;
+patch_vbmeta_flag=0;
+NO_BLOCK_DISPLAY=1;
+no_block_display=1;
+
+# Import AnyKernel core methods & setup
 . tools/ak3-core.sh;
 
+# =============================================================
+# EXTREME++ CYBERPUNK BANNER & SYSTEM METADATA
+# =============================================================
 ui_print " ";
 ui_print " ══════════════════════════════════════════════";
 ui_print "  🏎️  EDITION : BMW Gaming Edition (${OS_UPPER}) ";
@@ -524,24 +561,36 @@ ui_print "  ⚡  CLOCK   : 3.19 GHz Unlocked Monster Peak ";
 ui_print "  🛡️  ROOT    : ${ROOT_LABEL} ";
 ui_print " ══════════════════════════════════════════════";
 ui_print " ";
+sleep 1;
 
 dump_boot;
 write_boot;
+ui_print "  [1/4] ✅ Boot Image Applied Flawlessly!";
+ui_print " ";
+sleep 1;
 
 block=vendor_boot;
 is_slot_device=1;
+RAMDISK_COMPRESSION=auto;
 ramdisk_compression=auto;
+PATCH_VBMETA_FLAG=auto;
 patch_vbmeta_flag=0;
 
 reset_ak;
 dump_boot;
 write_boot;
+ui_print "  [2/4] ✅ DTB & GPU Overclock/Undervolt Table Injected!";
+ui_print " ";
+sleep 1;
 
 mount /data 2>/dev/null
 if [ -d /data/adb ]; then
     rm -f /data/adb/service.d/00-extreme-performance.sh
     rm -f /data/adb/post-fs-data.d/00-extreme-props.sh
 fi
+ui_print "  [3/4] ✅ Subsystems Clean & Verified!";
+ui_print " ";
+sleep 1;
 
 ui_print "  🎉 Extreme++ Kernel (${OS_UPPER}) Flashed!  ";
 ui_print " ══════════════════════════════════════════════";

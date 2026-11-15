@@ -1,13 +1,39 @@
 /*
- * PROJECT EXTREME++ CPUFreq Governor - High Performance Schedutil Evolution
+ * CPUFreq governor based on scheduler-provided CPU utilization data.
+ *
+ * Copyright (C) 2016, Intel Corporation
+ * Author: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+ *
+ * PROJECT EXTREME++ BMW Edition - Stock AstideLabs CAF WALT schedutil + EKM
  * Maintainer: PandeyJI-9
- * Optimized for POCO F4 (munch / SM8250-AC Kona) | HyperOS ONLY
- * 
- * Features:
- * - Zero-latency ramp-up (up_rate_limit_us = 0)
- * - Anti-100% choke & Gold cluster spillover logic
- * - Aggressive fast decay to idle when load drops
- * - Hardware-aware hispeed frequencies
+ * Device: POCO F4 (munch / SM8250-AC Kona)
+ *
+ * This file deliberately keeps the stock AstideLabs CAF/WALT schedutil
+ * scheduling algorithm.  No custom util boosting, no hard frequency floor,
+ * and no forced Gold performance lock are used here.
+ *
+ * The only addition is the EKM profile layer:
+ *   - policy0 (CPU0-3, Little): stock schedutil + EKM ceiling
+ *   - policy4 (CPU4-6, Gold):   stock schedutil + EKM ceiling
+ *   - policy7 (CPU7, Prime):    stock schedutil + EKM ceiling
+ *
+ * EKM interface:
+ *   /sys/kernel/extreme_profile  (also /sys/kernel/profile)
+ *     0 / gaming   -> Prime 3187200 kHz, Gold 2419200 kHz
+ *     1 / balanced -> Prime 2841600 kHz, Gold 2246400 kHz
+ *     2 / battery  -> Prime 2419200 kHz, Gold 1958400 kHz
+ *
+ * Profile enforcement goes through policy->user_policy.max and the standard
+ * cpufreq notifier/update path.  That avoids the old rwsem double-unlock bug
+ * and lets thermal/QoS limits still lower the ceiling safely.
+ *
+ * A profile is only a maximum ceiling.  It never forces a frequency and
+ * never sets policy->min, so every cluster can always scale down to its
+ * lowest OPP on its own.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -20,11 +46,9 @@
 #include <linux/sched/sysctl.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
-#include <linux/cpufreq.h>
-#include <linux/math64.h>
+#include <linux/string.h>
 
-
-struct extreme_plus_tunables {
+struct sugov_tunables {
 	struct gov_attr_set	attr_set;
 	unsigned int		up_rate_limit_us;
 	unsigned int		down_rate_limit_us;
@@ -34,21 +58,18 @@ struct extreme_plus_tunables {
 	bool			pl;
 };
 
-struct extreme_plus_policy {
+struct sugov_policy {
 	struct cpufreq_policy	*policy;
 
 	u64 last_ws;
 	u64 curr_cycles;
 	u64 last_cyc_update_time;
 	unsigned long avg_cap;
-	struct extreme_plus_tunables	*tunables;
+	struct sugov_tunables	*tunables;
 	struct list_head	tunables_hook;
 	unsigned long hispeed_util;
 	unsigned long rtg_boost_util;
 	unsigned long max;
-	unsigned long prev_raw_util;	/* pre-WALT-adjust util at last slope sample */
-	u64 prev_slope_time;		/* time of last slope sample (ns) */
-	u64 turbo_until;		/* Gear 2 hold deadline (ns) */
 
 	raw_spinlock_t		update_lock;	/* For shared policies */
 	u64			last_freq_update_time;
@@ -71,9 +92,9 @@ struct extreme_plus_policy {
 	bool			need_freq_update;
 };
 
-struct extreme_plus_cpu {
+struct sugov_cpu {
 	struct update_util_data	update_util;
-	struct extreme_plus_policy	*sg_policy;
+	struct sugov_policy	*sg_policy;
 	unsigned int		cpu;
 
 	bool			iowait_boost_pending;
@@ -95,13 +116,102 @@ struct extreme_plus_cpu {
 #endif
 };
 
-static DEFINE_PER_CPU(struct extreme_plus_cpu, extreme_plus_cpu);
+static DEFINE_PER_CPU(struct sugov_cpu, sugov_cpu);
 static unsigned int stale_ns;
-static DEFINE_PER_CPU(struct extreme_plus_tunables *, cached_tunables);
+static DEFINE_PER_CPU(struct sugov_tunables *, cached_tunables);
+
+/* EKM profile layer ------------------------------------------------------- */
+
+#define EXTREME_PROFILE_GAMING		0
+#define EXTREME_PROFILE_BALANCED	1
+#define EXTREME_PROFILE_BATTERY		2
+
+#define EXTREME_PRIME_STOCK_MAX		3187200U
+#define EXTREME_PRIME_BALANCED_MAX	2841600U
+#define EXTREME_PRIME_BATTERY_MAX	2419200U
+
+#define EXTREME_GOLD_STOCK_MAX		2419200U
+#define EXTREME_GOLD_BALANCED_MAX	2246400U
+#define EXTREME_GOLD_BATTERY_MAX	1958400U
+
+#define EXTREME_LITTLE_RTG_BOOST_FREQ	1000000U
+
+static int extreme_profile_mode = EXTREME_PROFILE_GAMING;
+static DEFINE_MUTEX(extreme_profile_lock);
+static struct cpufreq_governor extreme_plus_gov;
+
+static inline bool extreme_is_gold_policy(const struct cpufreq_policy *policy)
+{
+	return policy && policy->cpu >= 4 && policy->cpu <= 6;
+}
+
+static unsigned int extreme_profile_cap(const struct cpufreq_policy *policy)
+{
+	unsigned int cap = 0;
+
+	if (!policy)
+		return 0;
+
+	switch (READ_ONCE(extreme_profile_mode)) {
+	case EXTREME_PROFILE_BALANCED:
+		if (policy->cpu == 7)
+			cap = EXTREME_PRIME_BALANCED_MAX;
+		else if (extreme_is_gold_policy(policy))
+			cap = EXTREME_GOLD_BALANCED_MAX;
+		break;
+	case EXTREME_PROFILE_BATTERY:
+		if (policy->cpu == 7)
+			cap = EXTREME_PRIME_BATTERY_MAX;
+		else if (extreme_is_gold_policy(policy))
+			cap = EXTREME_GOLD_BATTERY_MAX;
+		break;
+	case EXTREME_PROFILE_GAMING:
+	default:
+		break;
+	}
+
+	return cap;
+}
+
+/*
+ * Enforce the EKM ceiling in the standard CPUFREQ_ADJUST path.
+ * Userspace (EKM/FKM/HyperOS thermal) can still request a lower maximum;
+ * this notifier only prevents the ceiling from being raised above the
+ * selected profile.
+ */
+static int extreme_policy_notifier(struct notifier_block *nb,
+				   unsigned long event, void *data)
+{
+	struct cpufreq_policy *policy = data;
+	unsigned int cap;
+
+	(void)nb;
+
+	if (!policy)
+		return NOTIFY_DONE;
+
+	if (event != CPUFREQ_ADJUST)
+		return NOTIFY_DONE;
+
+	cap = extreme_profile_cap(policy);
+	if (!cap)
+		return NOTIFY_OK;
+
+	if (cap < policy->min)
+		cap = policy->min;
+	if (policy->max > cap)
+		policy->max = cap;
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block extreme_policy_nb = {
+	.notifier_call = extreme_policy_notifier,
+};
 
 /************************ Governor internals ***********************/
 
-static bool extreme_plus_should_update_freq(struct extreme_plus_policy *sg_policy, u64 time)
+static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
 {
 	s64 delta_ns;
 
@@ -111,7 +221,7 @@ static bool extreme_plus_should_update_freq(struct extreme_plus_policy *sg_polic
 	 *
 	 * However, drivers cannot in general deal with cross-CPU
 	 * requests, so while get_next_freq() will work, our
-	 * extreme_plus_update_commit() call may not for the fast switching platforms.
+	 * sugov_update_commit() call may not for the fast switching platforms.
 	 *
 	 * Hence stop here for remote requests if they aren't supported
 	 * by the hardware, as calculating the frequency is pointless if
@@ -133,7 +243,7 @@ static bool extreme_plus_should_update_freq(struct extreme_plus_policy *sg_polic
 		 * limits update might be missed, so use a memory barrier to
 		 * ensure it.
 		 *
-		 * This pairs with the write memory barrier in extreme_plus_limits().
+		 * This pairs with the write memory barrier in sugov_limits().
 		 */
 		smp_mb();
 
@@ -168,53 +278,43 @@ static inline bool conservative_pl(void)
 #endif
 }
 
-static bool extreme_plus_up_down_rate_limit(struct extreme_plus_policy *sg_policy, u64 time,
+static bool sugov_up_down_rate_limit(struct sugov_policy *sg_policy, u64 time,
 				     unsigned int next_freq)
 {
 	s64 delta_ns;
 
-	if (sg_policy->need_freq_update)
-		return false;
-
 	delta_ns = time - sg_policy->last_freq_update_time;
 
-	/* Instant touch/load reaction: zero delay for ramping up */
-	if (next_freq > sg_policy->next_freq) {
-		if (sg_policy->up_rate_delay_ns == 0)
-			return false;
-		if (delta_ns < sg_policy->up_rate_delay_ns)
+	if (next_freq > sg_policy->next_freq &&
+	    delta_ns < sg_policy->up_rate_delay_ns)
 			return true;
-	}
 
-	/* Fast decay to idle: if target freq is dropping and CPU is near idle, drop immediately */
-	if (next_freq < sg_policy->next_freq) {
-		if (delta_ns < sg_policy->down_rate_delay_ns)
+	if (next_freq < sg_policy->next_freq &&
+	    delta_ns < sg_policy->down_rate_delay_ns)
 			return true;
-	}
 
 	return false;
 }
 
-static bool extreme_plus_update_next_freq(struct extreme_plus_policy *sg_policy, u64 time,
+static bool sugov_update_next_freq(struct sugov_policy *sg_policy, u64 time,
 				   unsigned int next_freq)
 {
-	if (!sg_policy->need_freq_update && sg_policy->next_freq == next_freq)
+	if (sg_policy->next_freq == next_freq)
 		return false;
 
-	if (extreme_plus_up_down_rate_limit(sg_policy, time, next_freq)) {
+	if (sugov_up_down_rate_limit(sg_policy, time, next_freq)) {
 		/* Restore cached freq as next_freq is not changed */
 		sg_policy->cached_raw_freq = sg_policy->prev_cached_raw_freq;
 		return false;
 	}
 
-	sg_policy->need_freq_update = false;
 	sg_policy->next_freq = next_freq;
 	sg_policy->last_freq_update_time = time;
 
 	return true;
 }
 
-static unsigned long freq_to_util(struct extreme_plus_policy *sg_policy,
+static unsigned long freq_to_util(struct sugov_policy *sg_policy,
 				  unsigned int freq)
 {
 	return mult_frac(sg_policy->max, freq,
@@ -222,7 +322,7 @@ static unsigned long freq_to_util(struct extreme_plus_policy *sg_policy,
 }
 
 #define KHZ 1000
-static void extreme_plus_track_cycles(struct extreme_plus_policy *sg_policy,
+static void sugov_track_cycles(struct sugov_policy *sg_policy,
 				unsigned int prev_freq,
 				u64 upto)
 {
@@ -233,6 +333,10 @@ static void extreme_plus_track_cycles(struct extreme_plus_policy *sg_policy,
 		return;
 
 	upto = min(upto, next_ws);
+	/* Underflow guard: prevent a backwards step from wrapping u64 */
+	if (upto <= sg_policy->last_cyc_update_time)
+		return;
+
 	/* Track cycles in current window */
 	delta_ns = upto - sg_policy->last_cyc_update_time;
 	delta_ns *= prev_freq;
@@ -242,7 +346,7 @@ static void extreme_plus_track_cycles(struct extreme_plus_policy *sg_policy,
 	sg_policy->last_cyc_update_time = upto;
 }
 
-static void extreme_plus_calc_avg_cap(struct extreme_plus_policy *sg_policy, u64 curr_ws,
+static void sugov_calc_avg_cap(struct sugov_policy *sg_policy, u64 curr_ws,
 				unsigned int prev_freq)
 {
 	u64 last_ws = sg_policy->last_ws;
@@ -251,8 +355,12 @@ static void extreme_plus_calc_avg_cap(struct extreme_plus_policy *sg_policy, u64
 	if (use_pelt())
 		return;
 
-	BUG_ON(curr_ws < last_ws);
-	if (curr_ws <= last_ws)
+	/*
+	 * Guard against clock skew or CPU hotplug window anomalies.
+	 * Do not use WARN_ON_ONCE here because panic_on_warn=1 can turn
+	 * warnings into hard kernel panics on some Android builds.
+	 */
+	if (unlikely(curr_ws <= last_ws))
 		return;
 
 	/* If we skipped some windows */
@@ -261,7 +369,7 @@ static void extreme_plus_calc_avg_cap(struct extreme_plus_policy *sg_policy, u64
 		/* Reset tracking history */
 		sg_policy->last_cyc_update_time = curr_ws;
 	} else {
-		extreme_plus_track_cycles(sg_policy, prev_freq, curr_ws);
+		sugov_track_cycles(sg_policy, prev_freq, curr_ws);
 		avg_freq = sg_policy->curr_cycles;
 		avg_freq /= sched_ravg_window / (NSEC_PER_SEC / KHZ);
 	}
@@ -270,16 +378,16 @@ static void extreme_plus_calc_avg_cap(struct extreme_plus_policy *sg_policy, u64
 	sg_policy->last_ws = curr_ws;
 }
 
-static void extreme_plus_fast_switch(struct extreme_plus_policy *sg_policy, u64 time,
+static void sugov_fast_switch(struct sugov_policy *sg_policy, u64 time,
 			      unsigned int next_freq)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned int cpu;
 
-	if (!extreme_plus_update_next_freq(sg_policy, time, next_freq))
+	if (!sugov_update_next_freq(sg_policy, time, next_freq))
 		return;
 
-	extreme_plus_track_cycles(sg_policy, sg_policy->policy->cur, time);
+	sugov_track_cycles(sg_policy, sg_policy->policy->cur, time);
 	next_freq = cpufreq_driver_fast_switch(policy, next_freq);
 	if (!next_freq)
 		return;
@@ -292,10 +400,10 @@ static void extreme_plus_fast_switch(struct extreme_plus_policy *sg_policy, u64 
 	}
 }
 
-static void extreme_plus_deferred_update(struct extreme_plus_policy *sg_policy, u64 time,
+static void sugov_deferred_update(struct sugov_policy *sg_policy, u64 time,
 				  unsigned int next_freq)
 {
-	if (!extreme_plus_update_next_freq(sg_policy, time, next_freq))
+	if (!sugov_update_next_freq(sg_policy, time, next_freq))
 		return;
 
 	if (use_pelt())
@@ -326,426 +434,35 @@ static void extreme_plus_deferred_update(struct extreme_plus_policy *sg_policy, 
  * next_freq (as calculated above) is returned, subject to policy min/max and
  * cpufreq driver limitations.
  */
-#define EXTREME_LITTLE_IDLE_FLOOR    576000
-#define EXTREME_LITTLE_ACTIVE_FLOOR  1056000
-#define EXTREME_GOLD_ACTIVE_FLOOR    1804800
-#define EXTREME_PRIME_ACTIVE_FLOOR   1516800
-
-#define EXTREME_DEFAULT_TARGET_FPS   90
-#define EXTREME_FPS_MIN              30
-#define EXTREME_FPS_MAX              240
-
-/*
- * PROJECT EXTREME++ Profile Architecture:
- * Profile 0 (Gaming / Default): Prime up to 3.19 GHz (3187200 kHz), Gold up to 2.42 GHz
- * Profile 1 (Balanced):         Prime clamped to 2.84 GHz (2841600 kHz), Gold to 2.25 GHz
- * Profile 2 (Battery):          Prime clamped to 2.42 GHz (2419200 kHz), Gold to 1.96 GHz
- */
-#define EXTREME_PROFILE_GAMING       0
-#define EXTREME_PROFILE_BALANCED     1
-#define EXTREME_PROFILE_BATTERY      2
-
-#define EXTREME_PRIME_STOCK_MAX      3187200U
-#define EXTREME_PRIME_BALANCED_MAX   2841600U
-#define EXTREME_PRIME_BATTERY_MAX    2419200U
-
-#define EXTREME_GOLD_STOCK_MAX       2419200U
-#define EXTREME_GOLD_BALANCED_MAX    2246400U
-#define EXTREME_GOLD_BATTERY_MAX     1958400U
-
-static int extreme_target_fps = EXTREME_DEFAULT_TARGET_FPS;
-static int extreme_profile_mode = EXTREME_PROFILE_GAMING;
-static DEFINE_MUTEX(extreme_profile_lock);
-static void extreme_profile_apply(int mode);
-
-static inline unsigned int extreme_prime_cruise(void)
-{
-	int fps = READ_ONCE(extreme_target_fps);
-	int profile = READ_ONCE(extreme_profile_mode);
-	unsigned int cruise;
-
-	if (fps < EXTREME_FPS_MIN)
-		fps = EXTREME_DEFAULT_TARGET_FPS;
-	if (fps <= 60)
-		cruise = 1804800;   /* 60 FPS  - 1.80 GHz efficiency */
-	else if (fps <= 90)
-		cruise = 2419200;   /* 90 FPS  - 2.42 GHz balanced */
-	else
-		cruise = 2841600;   /* 120+ FPS - 2.84 GHz performance */
-
-	if (profile == EXTREME_PROFILE_BATTERY)
-		cruise = min(cruise, (unsigned int)EXTREME_PRIME_BATTERY_MAX);
-
-	return cruise;
-}
-
-static inline unsigned int extreme_gold_cruise(void)
-{
-	int fps = READ_ONCE(extreme_target_fps);
-	int profile = READ_ONCE(extreme_profile_mode);
-	unsigned int cruise;
-
-	if (fps < EXTREME_FPS_MIN)
-		fps = EXTREME_DEFAULT_TARGET_FPS;
-	if (fps <= 60)
-		cruise = 1804800;   /* 60 FPS  - matches active floor */
-	else if (fps <= 90)
-		cruise = 2054400;   /* 90 FPS  - 2.05 GHz native Kona step */
-	else
-		cruise = 2246400;   /* 120+ FPS - 2.25 GHz sustained */
-
-	if (profile == EXTREME_PROFILE_BATTERY)
-		cruise = min(cruise, (unsigned int)EXTREME_GOLD_BATTERY_MAX);
-
-	return cruise;
-}
-#define EXTREME_PREDICTIVE_SLOPE_PCT 40
-#define EXTREME_TURBO_SATURATION_PCT 90
-
-/* Slope sensing: util rise is normalized to one frame window (~8.33ms @120Hz) */
-#define EXTREME_SLOPE_WINDOW_NS      (8 * NSEC_PER_MSEC)
-#define EXTREME_SLOPE_MIN_DT_NS      (250 * NSEC_PER_USEC) /* ignore faster samples */
-#define EXTREME_SLOPE_MAX_DT_NS      (20 * NSEC_PER_MSEC)  /* older baseline is stale */
-#define EXTREME_SLOPE_MIN_ABS_PCT    16  /* min absolute rise (% of max) to count as real fling */
-/* Gear 2 hold: stay in Apex Turbo ~2 frame periods, unless load collapses */
-#define EXTREME_TURBO_HOLD_NS        (16 * NSEC_PER_MSEC)
-#define EXTREME_TURBO_HOLD_MIN_PCT   30
-#define EXTREME_PRIME_MID_FREQ       2419200
-
-static unsigned int extreme_plus_apply_active_floor(struct cpufreq_policy *policy,
-						   unsigned int freq,
-						   unsigned long util,
-						   unsigned long max)
-{
-	unsigned int cpu = policy->cpu;
-	bool is_busy = (util >= mult_frac(max, 35, 100));
-
-#ifdef CONFIG_SCHED_WALT
-	if (!use_pelt()) {
-		unsigned int c;
-		for_each_cpu(c, policy->cpus) {
-			struct extreme_plus_cpu *c_cpu = &per_cpu(extreme_plus_cpu, c);
-			if (c_cpu->walt_load.rtgb_active) {
-				is_busy = true;
-				break;
-			}
-		}
-	}
-#endif
-
-	/*
-	 * Anti-Flicker & Active Task Floor:
-	 * 1. Little cores (0-3): Maintain 576 MHz idle floor to eliminate Samsung E4
-	 *    AMOLED panel refresh rate mode-switch flickering. When busy, floor at 1056 MHz.
-	 * 2. Gold cores (4-6) & Prime (7): When actively executing load (util >= 35% or WALT RTGB),
-	 *    maintain responsive gaming floors (Gold: 1.80 GHz, Prime: 1.51 GHz).
-	 *    When IDLE or light load (< 35% util), allow full scale-down to hardware minimum
-	 *    (Gold: 710 MHz, Prime: 844 MHz) so FKM / screen-on idle draws lowest power!
-	 */
-	if (cpu < 4) {
-		if (freq < EXTREME_LITTLE_IDLE_FLOOR)
-			freq = EXTREME_LITTLE_IDLE_FLOOR;
-		if (is_busy && freq < EXTREME_LITTLE_ACTIVE_FLOOR)
-			freq = EXTREME_LITTLE_ACTIVE_FLOOR;
-	} else if (cpu < 7) {
-		if (is_busy && freq < EXTREME_GOLD_ACTIVE_FLOOR)
-			freq = EXTREME_GOLD_ACTIVE_FLOOR;
-	} else {
-		if (is_busy && freq < EXTREME_PRIME_ACTIVE_FLOOR)
-			freq = EXTREME_PRIME_ACTIVE_FLOOR;
-	}
-	return freq;
-}
-
-static unsigned int get_next_freq(struct extreme_plus_policy *sg_policy,
+static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 				  unsigned long util, unsigned long max)
 {
 	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned int freq = arch_scale_freq_invariant() ?
-				policy->cpuinfo.max_freq : policy->cur;
+	unsigned int freq;
 
-	return map_util_freq(util, freq, max);
-}
+	freq = arch_scale_freq_invariant() ?
+	       policy->cpuinfo.max_freq : policy->cur;
 
-/*
- * EXTREME+ Autonomous Neural-Adaptive Core Engine (SMP Safe & Hardware Calibrated)
- * 1. Predictive Acceleration Slope Sensing:
- *    Detects incoming frame spikes (slope >= 25%) and pre-ramps frequencies before frames drop.
- * 2. Strict SMP Concurrency Isolation (Zero Cross-CPU Mutex/Data-Race):
- *    Each core evaluates its own policy and cluster capacity independently.
- * 3. Sustained Frame-Pacing Architecture (Zero 250ms Sawtooth Micro-Stutter):
- *    Prime core cruises at 2.84 GHz sweet spot and ramps cleanly to Apex Turbo when demanded.
- * 4. Strict Thermal & Policy Boundary Clamping:
- *    All target frequency requests are strictly bounded by policy->min and policy->max,
- *    guaranteeing that thermal engine and dynamic user profile clamps are 100% honored.
- * 5. Guaranteed Hardware OPP Driver Resolution:
- *    Every calculated frequency is passed through cpufreq_driver_resolve_freq(policy, freq)
- *    to ensure 100% OPP alignment and keep cached_raw_freq in exact synchronization.
- */
-static unsigned int extreme_plus_autonomous_engine(struct extreme_plus_cpu *sg_cpu,
-						  struct extreme_plus_policy *sg_policy,
-						  unsigned long util, unsigned long max,
-						  unsigned long raw_util, u64 time)
-{
-	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned int cpu = sg_cpu->cpu;
-	unsigned int cur_max = READ_ONCE(policy->max);
-	unsigned int cur_min = READ_ONCE(policy->min);
-	int profile = READ_ONCE(extreme_profile_mode);
-	unsigned int raw_f = get_next_freq(sg_policy, util, max);
-	bool is_burst_slope = false;
-	bool in_turbo_hold;
-	bool is_saturated = (util >= mult_frac(max, EXTREME_TURBO_SATURATION_PCT, 100));
-	bool is_render_active = false;
-	bool boot_settled = (time >= 60ULL * NSEC_PER_SEC);
-	unsigned int target_f;
-	unsigned int c;
+	freq = map_util_freq(util, freq, max);
+	trace_sugov_next_freq(policy->cpu, util, max, freq);
 
-	/*
-	 * In-Kernel Dynamic Profile Clamping:
-	 * Guarantee that user profile selection cannot be bypassed by thermal
-	 * resets, userspace daemons (mi_thermald/perfd), or burst logic.
-	 */
-	if (cpu == 7) {
-		if (profile == EXTREME_PROFILE_BALANCED)
-			cur_max = min(cur_max, (unsigned int)EXTREME_PRIME_BALANCED_MAX);
-		else if (profile == EXTREME_PROFILE_BATTERY)
-			cur_max = min(cur_max, (unsigned int)EXTREME_PRIME_BATTERY_MAX);
-	} else if (cpu >= 4 && cpu < 7) {
-		if (profile == EXTREME_PROFILE_BALANCED)
-			cur_max = min(cur_max, (unsigned int)EXTREME_GOLD_BALANCED_MAX);
-		else if (profile == EXTREME_PROFILE_BATTERY)
-			cur_max = min(cur_max, (unsigned int)EXTREME_GOLD_BATTERY_MAX);
-	}
-
-	/*
-	 * Predictive slope, measured on RAW util (before WALT boost/hispeed
-	 * adjustments, so boost toggling is not mistaken for a frame spike) and
-	 * normalized to one frame window so irregular sample spacing doesn't
-	 * skew it. A burst needs both a relative (per-window) and an absolute rise.
-	 */
-	{
-		u64 dt = time - sg_policy->prev_slope_time;
-
-		if (!sg_policy->prev_slope_time || dt > EXTREME_SLOPE_MAX_DT_NS) {
-			/*
-			 * Frame 0 Touch Burst / Post-Idle Wakeup:
-			 * If dt > EXTREME_SLOPE_MAX_DT_NS (>20ms), the core was idling.
-			 * An incoming util jump directly to >= 25% indicates an instant
-			 * user touch fling or render launch. Firing immediately restores
-			 * the zero-latency Frame 0 response of the Oct 17 build.
-			 */
-			if (raw_util >= mult_frac(max, EXTREME_PREDICTIVE_SLOPE_PCT, 100))
-				is_burst_slope = true;
-
-			sg_policy->prev_raw_util = raw_util;
-			sg_policy->prev_slope_time = time;
-		} else if (dt >= EXTREME_SLOPE_MIN_DT_NS) {
-			s64 rise = (s64)raw_util - (s64)sg_policy->prev_raw_util;
-			s64 per_win = div64_s64(rise * (s64)EXTREME_SLOPE_WINDOW_NS,
-						(s64)dt);
-
-			is_burst_slope =
-				per_win >= (s64)mult_frac(max, EXTREME_PREDICTIVE_SLOPE_PCT, 100) &&
-				rise >= (s64)mult_frac(max, EXTREME_SLOPE_MIN_ABS_PCT, 100);
-
-			sg_policy->prev_raw_util = raw_util;
-			sg_policy->prev_slope_time = time;
-		}
-		/* dt < MIN_DT: keep baseline, let the rise accumulate */
-	}
-
-	if (boot_settled && is_burst_slope)
-		sg_policy->turbo_until = time + EXTREME_TURBO_HOLD_NS;
-	in_turbo_hold = boot_settled && time < sg_policy->turbo_until &&
-			raw_util >= mult_frac(max, EXTREME_TURBO_HOLD_MIN_PCT, 100);
-
-	/* Cluster-wide Render & Multitask Evaluation */
-	for_each_cpu(c, policy->cpus) {
-		struct extreme_plus_cpu *c_cpu = &per_cpu(extreme_plus_cpu, c);
-#ifdef CONFIG_SCHED_WALT
-		if (!use_pelt() && c_cpu->walt_load.rtgb_active) {
-			is_render_active = true;
-			break;
-		}
-#endif
-		if (util >= sg_policy->hispeed_util) {
-			struct rq *c_rq = cpu_rq(c);
-			if (c_rq && c_rq->nr_running > 1) {
-				is_render_active = true;
-				break;
-			}
-		}
-	}
-
-	/* ── Cluster 2: Prime Core 7 (Kryo 585 Prime) ── */
-	if (cpu == 7) {
-		unsigned int prime_cruise = extreme_prime_cruise();
-
-		/* Gear 2 (Apex Turbo 3.19 GHz): On genuine heavy saturation (>= 90%) or steep burst hold */
-		if (boot_settled && (is_saturated || in_turbo_hold)) {
-			target_f = cur_max;
-		} else if (is_render_active || util >= sg_policy->hispeed_util) {
-			/* Gear 1 (Cruising Gear): Maintain sustained baseline without artificially clipping higher steps */
-			target_f = min(cur_max, max(raw_f, prime_cruise));
-		} else {
-			/* Normal UI / Demand: scale smoothly through all OPP steps without skipping */
-			target_f = raw_f;
-		}
-	}
-	/* ── Cluster 1: Gold Cores 4-6 (Kryo 585 Gold) ── */
-	else if (cpu >= 4 && cpu < 7) {
-		unsigned int gold_cruise = extreme_gold_cruise();
-
-		/* Gear 2 (Apex Gold Turbo 2.42 GHz): On heavy saturation (>= 90%) or steep burst hold */
-		if (boot_settled && (is_saturated || in_turbo_hold)) {
-			target_f = cur_max;
-		} else if (is_render_active || util >= sg_policy->hispeed_util) {
-			/* Gear 1 (Sustained Gaming Cruise): Maintain cruising floor while allowing higher scaling */
-			target_f = min(cur_max, max(raw_f, gold_cruise));
-		} else {
-			/* Normal UI / Idle: follow calculated demand cleanly down to hardware floor (710 MHz) */
-			target_f = raw_f;
-		}
-	}
-	/* ── Cluster 0: Silver Cores 0-3 (Kryo 585 Silver) ── */
-	else {
-		target_f = raw_f;
-	}
-
-	/* Apply Anti-Flicker & Active Task Floors */
-	target_f = extreme_plus_apply_active_floor(policy, target_f, util, max);
-	target_f = clamp_val(target_f, cur_min, cur_max);
-	trace_sugov_next_freq(policy->cpu, util, max, target_f);
-
-	if (target_f == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
+	if (freq == sg_policy->cached_raw_freq && !sg_policy->need_freq_update)
 		return sg_policy->next_freq;
 
+	sg_policy->need_freq_update = false;
 	sg_policy->prev_cached_raw_freq = sg_policy->cached_raw_freq;
-	sg_policy->cached_raw_freq = target_f;
-
-	/* Ensure 100% valid OPP resolution and hardware sync */
-	return cpufreq_driver_resolve_freq(policy, target_f);
+	sg_policy->cached_raw_freq = freq;
+	return cpufreq_driver_resolve_freq(policy, freq);
 }
-
-extern long
-schedtune_cpu_margin_with(unsigned long util, int cpu, struct task_struct *p);
 
 /*
- * This function computes an effective utilization for the given CPU, to be
- * used for frequency selection given the linear relation: f = u * f_max.
- *
- * The scheduler tracks the following metrics:
- *
- *   cpu_util_{cfs,rt,dl,irq}()
- *   cpu_bw_dl()
- *
- * Where the cfs,rt and dl util numbers are tracked with the same metric and
- * synchronized windows and are thus directly comparable.
- *
- * The @util parameter passed to this function is assumed to be the aggregation
- * of RT and CFS util numbers. The cases of DL and IRQ are managed here.
- *
- * The cfs,rt,dl utilization are the running times measured with rq->clock_task
- * which excludes things like IRQ and steal-time. These latter are then accrued
- * in the irq utilization.
- *
- * The DL bandwidth number otoh is not a measured metric but a value computed
- * based on the task model parameters and gives the minimal utilization
- * required to meet deadlines.
+ * schedutil_cpu_util() is provided by kernel/sched/cpufreq_schedutil.c.
+ * Reuse the stock implementation so the EKM governor only owns policy and
+ * does not duplicate the scheduler utilization helper.
  */
-static unsigned long __maybe_unused extreme_plus_cpu_util(int cpu, unsigned long util_cfs,
-				 unsigned long max, enum schedutil_type type,
-				 struct task_struct *p)
-{
-	unsigned long dl_util, util, irq;
-	struct rq *rq = cpu_rq(cpu);
-
-	if (!uclamp_is_used() &&
-	    type == FREQUENCY_UTIL && rt_rq_is_runnable(&rq->rt)) {
-		return max;
-	}
-
-	/*
-	 * Early check to see if IRQ/steal time saturates the CPU, can be
-	 * because of inaccuracies in how we track these -- see
-	 * update_irq_load_avg().
-	 */
-	irq = cpu_util_irq(rq);
-	if (unlikely(irq >= max))
-		return max;
-
-	/*
-	 * Because the time spend on RT/DL tasks is visible as 'lost' time to
-	 * CFS tasks and we use the same metric to track the effective
-	 * utilization (PELT windows are synchronized) we can directly add them
-	 * to obtain the CPU's actual utilization.
-	 *
-	 * CFS and RT utilization can be boosted or capped, depending on
-	 * utilization clamp constraints requested by currently RUNNABLE
-	 * tasks.
-	 * When there are no CFS RUNNABLE tasks, clamps are released and
-	 * frequency will be gracefully reduced with the utilization decay.
-	 */
-	util = util_cfs + cpu_util_rt(rq);
-	if (type == FREQUENCY_UTIL)
-#ifdef CONFIG_SCHED_TUNE
-		util += schedtune_cpu_margin_with(util, cpu, p);
-#else
-		util = uclamp_rq_util_with(rq, util, p);
-#endif
-
-	dl_util = cpu_util_dl(rq);
-
-	/*
-	 * For frequency selection we do not make cpu_util_dl() a permanent part
-	 * of this sum because we want to use cpu_bw_dl() later on, but we need
-	 * to check if the CFS+RT+DL sum is saturated (ie. no idle time) such
-	 * that we select f_max when there is no idle time.
-	 *
-	 * NOTE: numerical errors or stop class might cause us to not quite hit
-	 * saturation when we should -- something for later.
-	 */
-	if (util + dl_util >= max)
-		return max;
-
-	/*
-	 * OTOH, for energy computation we need the estimated running time, so
-	 * include util_dl and ignore dl_bw.
-	 */
-	if (type == ENERGY_UTIL)
-		util += dl_util;
-
-	/*
-	 * There is still idle time; further improve the number by using the
-	 * irq metric. Because IRQ/steal time is hidden from the task clock we
-	 * need to scale the task numbers:
-	 *
-	 *              1 - irq
-	 *   U' = irq + ------- * U
-	 *                max
-	 */
-	util = scale_irq_capacity(util, irq, max);
-	util += irq;
-
-	/*
-	 * Bandwidth required by DEADLINE must always be granted while, for
-	 * FAIR and RT, we use blocked utilization of IDLE CPUs as a mechanism
-	 * to gracefully reduce the frequency when no tasks show up for longer
-	 * periods of time.
-	 *
-	 * Ideally we would like to set bw_dl as min/guaranteed freq and util +
-	 * bw_dl as requested freq. However, cpufreq is not yet ready for such
-	 * an interface. So, we only do the latter for now.
-	 */
-	if (type == FREQUENCY_UTIL)
-		util += cpu_bw_dl(rq);
-
-	return min(max, util);
-}
 
 #ifdef CONFIG_SCHED_WALT
-static unsigned long extreme_plus_get_util(struct extreme_plus_cpu *sg_cpu)
+static unsigned long sugov_get_util(struct sugov_cpu *sg_cpu)
 {
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
 	unsigned long max = arch_scale_cpu_capacity(NULL, sg_cpu->cpu);
@@ -756,7 +473,7 @@ static unsigned long extreme_plus_get_util(struct extreme_plus_cpu *sg_cpu)
 	return stune_util(sg_cpu->cpu, 0, &sg_cpu->walt_load);
 }
 #else
-static unsigned long extreme_plus_get_util(struct extreme_plus_cpu *sg_cpu)
+static unsigned long sugov_get_util(struct sugov_cpu *sg_cpu)
 {
 	struct rq *rq = cpu_rq(sg_cpu->cpu);
 
@@ -766,13 +483,13 @@ static unsigned long extreme_plus_get_util(struct extreme_plus_cpu *sg_cpu)
 	sg_cpu->max = max;
 	sg_cpu->bw_dl = cpu_bw_dl(rq);
 
-	return extreme_plus_cpu_util(sg_cpu->cpu, util_cfs, max,
+	return schedutil_cpu_util(sg_cpu->cpu, util_cfs, max,
 				  FREQUENCY_UTIL, NULL);
 }
 #endif
 
 /**
- * extreme_plus_iowait_reset() - Reset the IO boost status of a CPU.
+ * sugov_iowait_reset() - Reset the IO boost status of a CPU.
  * @sg_cpu: the sugov data for the CPU to boost
  * @time: the update time from the caller
  * @set_iowait_boost: true if an IO boost has been requested
@@ -782,7 +499,7 @@ static unsigned long extreme_plus_get_util(struct extreme_plus_cpu *sg_cpu)
  * we enable the boost starting from the minimum frequency, which improves
  * energy efficiency by ignoring sporadic wakeups from IO.
  */
-static bool extreme_plus_iowait_reset(struct extreme_plus_cpu *sg_cpu, u64 time,
+static bool sugov_iowait_reset(struct sugov_cpu *sg_cpu, u64 time,
 			       bool set_iowait_boost)
 {
 	s64 delta_ns = time - sg_cpu->last_update;
@@ -798,7 +515,7 @@ static bool extreme_plus_iowait_reset(struct extreme_plus_cpu *sg_cpu, u64 time,
 }
 
 /**
- * extreme_plus_iowait_boost() - Updates the IO boost status of a CPU.
+ * sugov_iowait_boost() - Updates the IO boost status of a CPU.
  * @sg_cpu: the sugov data for the CPU to boost
  * @time: the update time from the caller
  * @flags: SCHED_CPUFREQ_IOWAIT if the task is waking up after an IO wait
@@ -810,14 +527,14 @@ static bool extreme_plus_iowait_reset(struct extreme_plus_cpu *sg_cpu, u64 time,
  * To keep doubling, an IO boost has to be requested at least once per tick,
  * otherwise we restart from the utilization of the minimum OPP.
  */
-static void extreme_plus_iowait_boost(struct extreme_plus_cpu *sg_cpu, u64 time,
+static void sugov_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,
 			       unsigned int flags)
 {
 	bool set_iowait_boost = flags & SCHED_CPUFREQ_IOWAIT;
 
 	/* Reset boost if the CPU appears to have been idle enough */
 	if (sg_cpu->iowait_boost &&
-	    extreme_plus_iowait_reset(sg_cpu, time, set_iowait_boost))
+	    sugov_iowait_reset(sg_cpu, time, set_iowait_boost))
 		return;
 
 	/* Boost only tasks waking up after IO */
@@ -836,12 +553,12 @@ static void extreme_plus_iowait_boost(struct extreme_plus_cpu *sg_cpu, u64 time,
 		return;
 	}
 
-	/* First wakeup after IO: start with hispeed/half-max boost for instant UFS 3.1 unblocking */
-	sg_cpu->iowait_boost = max_t(unsigned int, sg_cpu->min << 2, SCHED_CAPACITY_SCALE >> 1);
+	/* First wakeup after IO: start with minimum boost */
+	sg_cpu->iowait_boost = sg_cpu->min;
 }
 
 /**
- * extreme_plus_iowait_apply() - Apply the IO boost to a CPU.
+ * sugov_iowait_apply() - Apply the IO boost to a CPU.
  * @sg_cpu: the sugov data for the cpu to boost
  * @time: the update time from the caller
  * @util: the utilization to (eventually) boost
@@ -850,7 +567,7 @@ static void extreme_plus_iowait_boost(struct extreme_plus_cpu *sg_cpu, u64 time,
  * A CPU running a task which woken up after an IO operation can have its
  * utilization boosted to speed up the completion of those IO operations.
  * The IO boost value is increased each time a task wakes up from IO, in
- * extreme_plus_iowait_apply(), and it's instead decreased by this function,
+ * sugov_iowait_apply(), and it's instead decreased by this function,
  * each time an increase has not been requested (!iowait_boost_pending).
  *
  * A CPU which also appears to have been idle for at least one tick has also
@@ -859,7 +576,7 @@ static void extreme_plus_iowait_boost(struct extreme_plus_cpu *sg_cpu, u64 time,
  * This mechanism is designed to boost high frequently IO waiting tasks, while
  * being more conservative on tasks which does sporadic IO operations.
  */
-static unsigned long extreme_plus_iowait_apply(struct extreme_plus_cpu *sg_cpu, u64 time,
+static unsigned long sugov_iowait_apply(struct sugov_cpu *sg_cpu, u64 time,
 					unsigned long util, unsigned long max)
 {
 	unsigned long boost;
@@ -869,7 +586,7 @@ static unsigned long extreme_plus_iowait_apply(struct extreme_plus_cpu *sg_cpu, 
 		return util;
 
 	/* Reset boost if the CPU appears to have been idle enough */
-	if (extreme_plus_iowait_reset(sg_cpu, time, false))
+	if (sugov_iowait_reset(sg_cpu, time, false))
 		return util;
 
 	if (!sg_cpu->iowait_boost_pending) {
@@ -894,7 +611,7 @@ static unsigned long extreme_plus_iowait_apply(struct extreme_plus_cpu *sg_cpu, 
 }
 
 #ifdef CONFIG_NO_HZ_COMMON
-static bool extreme_plus_cpu_is_busy(struct extreme_plus_cpu *sg_cpu)
+static bool sugov_cpu_is_busy(struct sugov_cpu *sg_cpu)
 {
 	unsigned long idle_calls = tick_nohz_get_idle_calls_cpu(sg_cpu->cpu);
 	bool ret = idle_calls == sg_cpu->saved_idle_calls;
@@ -903,18 +620,18 @@ static bool extreme_plus_cpu_is_busy(struct extreme_plus_cpu *sg_cpu)
 	return ret;
 }
 #else
-static inline bool extreme_plus_cpu_is_busy(struct extreme_plus_cpu *sg_cpu) { return false; }
+static inline bool sugov_cpu_is_busy(struct sugov_cpu *sg_cpu) { return false; }
 #endif /* CONFIG_NO_HZ_COMMON */
 
 #define NL_RATIO 75
-#define DEFAULT_HISPEED_LOAD 75
-#define DEFAULT_CPU0_RTG_BOOST_FREQ 1382400
-#define DEFAULT_CPU4_RTG_BOOST_FREQ 1996800
-#define DEFAULT_CPU7_RTG_BOOST_FREQ 2419200
-static void extreme_plus_walt_adjust(struct extreme_plus_cpu *sg_cpu, unsigned long *util,
+#define DEFAULT_HISPEED_LOAD 90
+#define DEFAULT_CPU0_RTG_BOOST_FREQ 1000000
+#define DEFAULT_CPU4_RTG_BOOST_FREQ 0
+#define DEFAULT_CPU7_RTG_BOOST_FREQ 0
+static void sugov_walt_adjust(struct sugov_cpu *sg_cpu, unsigned long *util,
 			      unsigned long *max)
 {
-	struct extreme_plus_policy *sg_policy = sg_cpu->sg_policy;
+	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	bool is_migration = sg_cpu->flags & SCHED_CPUFREQ_INTERCLUSTER_MIG;
 	bool is_rtg_boost = sg_cpu->walt_load.rtgb_active;
 	unsigned long nl = sg_cpu->walt_load.nl;
@@ -946,36 +663,16 @@ static void extreme_plus_walt_adjust(struct extreme_plus_cpu *sg_cpu, unsigned l
 }
 
 /*
- * Make extreme_plus_should_update_freq() ignore the rate limit when DL
+ * Make sugov_should_update_freq() ignore the rate limit when DL
  * has increased the utilization.
  */
-static inline void ignore_dl_rate_limit(struct extreme_plus_cpu *sg_cpu, struct extreme_plus_policy *sg_policy)
+static inline void ignore_dl_rate_limit(struct sugov_cpu *sg_cpu, struct sugov_policy *sg_policy)
 {
 	if (cpu_bw_dl(cpu_rq(sg_cpu->cpu)) > sg_cpu->bw_dl)
 		WRITE_ONCE(sg_policy->limits_changed, true);
 }
 
-static inline unsigned int extreme_plus_default_hispeed(struct cpufreq_policy *policy)
-{
-	if (policy->cpu < 4)
-		return 1056000;
-	else if (policy->cpu < 7)
-		return 1804800;
-	else
-		return 2169600;
-}
-
-static inline unsigned int extreme_plus_default_rtg_boost(struct cpufreq_policy *policy)
-{
-	if (policy->cpu < 4)
-		return DEFAULT_CPU0_RTG_BOOST_FREQ;
-	else if (policy->cpu < 7)
-		return DEFAULT_CPU4_RTG_BOOST_FREQ;
-	else
-		return DEFAULT_CPU7_RTG_BOOST_FREQ;
-}
-
-static inline unsigned long target_util(struct extreme_plus_policy *sg_policy,
+static inline unsigned long target_util(struct sugov_policy *sg_policy,
 				  unsigned int freq)
 {
 	unsigned long util;
@@ -985,52 +682,47 @@ static inline unsigned long target_util(struct extreme_plus_policy *sg_policy,
 	return util;
 }
 
-static void extreme_plus_update_single(struct update_util_data *hook, u64 time,
+static void sugov_update_single(struct update_util_data *hook, u64 time,
 				unsigned int flags)
 {
-	struct extreme_plus_cpu *sg_cpu = container_of(hook, struct extreme_plus_cpu, update_util);
-	struct extreme_plus_policy *sg_policy = sg_cpu->sg_policy;
-	unsigned long util, max;
+	struct sugov_cpu *sg_cpu = container_of(hook, struct sugov_cpu, update_util);
+	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
+	unsigned long util, max, hs_util, boost_util;
 	unsigned int next_f;
 	bool busy;
 
 	if (!sg_policy->tunables->pl && flags & SCHED_CPUFREQ_PL)
 		return;
 
-	extreme_plus_iowait_boost(sg_cpu, time, flags);
+	sugov_iowait_boost(sg_cpu, time, flags);
 	sg_cpu->last_update = time;
 
 	ignore_dl_rate_limit(sg_cpu, sg_policy);
 
-	if (!extreme_plus_should_update_freq(sg_policy, time))
+	if (!sugov_should_update_freq(sg_policy, time))
 		return;
 
 	/* Limits may have changed, don't skip frequency update */
 	busy = use_pelt() && !sg_policy->need_freq_update &&
-		extreme_plus_cpu_is_busy(sg_cpu);
+		sugov_cpu_is_busy(sg_cpu);
 
-	sg_cpu->util = util = extreme_plus_get_util(sg_cpu);
+	sg_cpu->util = util = sugov_get_util(sg_cpu);
 	max = sg_cpu->max;
 	sg_cpu->flags = flags;
 
 	if (sg_policy->max != max) {
-		unsigned int hs_freq, boost_freq;
-
 		sg_policy->max = max;
+		hs_util = target_util(sg_policy,
+				       sg_policy->tunables->hispeed_freq);
+		sg_policy->hispeed_util = hs_util;
 
-		hs_freq = sg_policy->tunables->hispeed_freq;
-		if (!hs_freq || (!have_governor_per_policy() && sg_cpu->cpu >= 4))
-			hs_freq = extreme_plus_default_hispeed(sg_policy->policy);
-		sg_policy->hispeed_util = target_util(sg_policy, hs_freq);
-
-		boost_freq = sg_policy->tunables->rtg_boost_freq;
-		if (!boost_freq || (!have_governor_per_policy() && sg_cpu->cpu >= 4))
-			boost_freq = extreme_plus_default_rtg_boost(sg_policy->policy);
-		sg_policy->rtg_boost_util = target_util(sg_policy, boost_freq);
+		boost_util = target_util(sg_policy,
+				    sg_policy->tunables->rtg_boost_freq);
+		sg_policy->rtg_boost_util = boost_util;
 	}
 
-	util = extreme_plus_iowait_apply(sg_cpu, time, util, max);
-	extreme_plus_calc_avg_cap(sg_policy, sg_cpu->walt_load.ws,
+	util = sugov_iowait_apply(sg_cpu, time, util, max);
+	sugov_calc_avg_cap(sg_policy, sg_cpu->walt_load.ws,
 			   sg_policy->policy->cur);
 
 	trace_sugov_util_update(sg_cpu->cpu, sg_cpu->util,
@@ -1038,14 +730,13 @@ static void extreme_plus_update_single(struct update_util_data *hook, u64 time,
 				sg_cpu->walt_load.pl,
 				sg_cpu->walt_load.rtgb_active, flags);
 
-	extreme_plus_walt_adjust(sg_cpu, &util, &max);
-	next_f = extreme_plus_autonomous_engine(sg_cpu, sg_policy, util, max,
-						sg_cpu->util, time);
+	sugov_walt_adjust(sg_cpu, &util, &max);
+	next_f = get_next_freq(sg_policy, util, max);
 	/*
 	 * Do not reduce the frequency if the CPU has not been idle
 	 * recently, as the reduction is likely to be premature then.
 	 */
-	if (!sg_policy->need_freq_update && busy && next_f < sg_policy->next_freq) {
+	if (busy && next_f < sg_policy->next_freq) {
 		next_f = sg_policy->next_freq;
 
 		/* Restore cached freq as next_freq has changed */
@@ -1058,24 +749,24 @@ static void extreme_plus_update_single(struct update_util_data *hook, u64 time,
 	 * necessary to acquire the lock in the fast switch case.
 	 */
 	if (sg_policy->policy->fast_switch_enabled) {
-		extreme_plus_fast_switch(sg_policy, time, next_f);
+		sugov_fast_switch(sg_policy, time, next_f);
 	} else {
 		raw_spin_lock(&sg_policy->update_lock);
-		extreme_plus_deferred_update(sg_policy, time, next_f);
+		sugov_deferred_update(sg_policy, time, next_f);
 		raw_spin_unlock(&sg_policy->update_lock);
 	}
 }
 
-static unsigned int extreme_plus_next_freq_shared(struct extreme_plus_cpu *sg_cpu, u64 time)
+static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 {
-	struct extreme_plus_policy *sg_policy = sg_cpu->sg_policy;
+	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	struct cpufreq_policy *policy = sg_policy->policy;
 	u64 last_freq_update_time = sg_policy->last_freq_update_time;
-	unsigned long util = 0, max = 1, raw_util = 0;
+	unsigned long util = 0, max = 1;
 	unsigned int j;
 
 	for_each_cpu(j, policy->cpus) {
-		struct extreme_plus_cpu *j_sg_cpu = &per_cpu(extreme_plus_cpu, j);
+		struct sugov_cpu *j_sg_cpu = &per_cpu(sugov_cpu, j);
 		unsigned long j_util, j_max;
 		s64 delta_ns;
 
@@ -1088,7 +779,7 @@ static unsigned int extreme_plus_next_freq_shared(struct extreme_plus_cpu *sg_cp
 		 */
 		delta_ns = last_freq_update_time - j_sg_cpu->last_update;
 		if (delta_ns > stale_ns) {
-			extreme_plus_iowait_reset(j_sg_cpu, last_freq_update_time,
+			sugov_iowait_reset(j_sg_cpu, last_freq_update_time,
 					   false);
 			continue;
 		}
@@ -1102,54 +793,49 @@ static unsigned int extreme_plus_next_freq_shared(struct extreme_plus_cpu *sg_cp
 		 */
 		j_util = j_sg_cpu->util;
 		j_max = j_sg_cpu->max;
-		raw_util = max(raw_util, j_util);
-		j_util = extreme_plus_iowait_apply(j_sg_cpu, time, j_util, j_max);
-		extreme_plus_walt_adjust(j_sg_cpu, &j_util, &j_max);
+		j_util = sugov_iowait_apply(j_sg_cpu, time, j_util, j_max);
 
 		if (j_util * max >= j_max * util) {
 			util = j_util;
 			max = j_max;
 		}
+
+		sugov_walt_adjust(j_sg_cpu, &util, &max);
 	}
 
-	return extreme_plus_autonomous_engine(sg_cpu, sg_policy, util, max,
-					      raw_util, time);
+	return get_next_freq(sg_policy, util, max);
 }
 
 static void
-extreme_plus_update_shared(struct update_util_data *hook, u64 time, unsigned int flags)
+sugov_update_shared(struct update_util_data *hook, u64 time, unsigned int flags)
 {
-	struct extreme_plus_cpu *sg_cpu = container_of(hook, struct extreme_plus_cpu, update_util);
-	struct extreme_plus_policy *sg_policy = sg_cpu->sg_policy;
+	struct sugov_cpu *sg_cpu = container_of(hook, struct sugov_cpu, update_util);
+	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
+	unsigned long hs_util, boost_util;
 	unsigned int next_f;
 
 	if (!sg_policy->tunables->pl && flags & SCHED_CPUFREQ_PL)
 		return;
 
-	sg_cpu->util = extreme_plus_get_util(sg_cpu);
+	sg_cpu->util = sugov_get_util(sg_cpu);
 	sg_cpu->flags = flags;
 	raw_spin_lock(&sg_policy->update_lock);
 
 	if (sg_policy->max != sg_cpu->max) {
-		unsigned int hs_freq, boost_freq;
-
 		sg_policy->max = sg_cpu->max;
+		hs_util = target_util(sg_policy,
+					sg_policy->tunables->hispeed_freq);
+		sg_policy->hispeed_util = hs_util;
 
-		hs_freq = sg_policy->tunables->hispeed_freq;
-		if (!hs_freq || (!have_governor_per_policy() && sg_cpu->cpu >= 4))
-			hs_freq = extreme_plus_default_hispeed(sg_policy->policy);
-		sg_policy->hispeed_util = target_util(sg_policy, hs_freq);
-
-		boost_freq = sg_policy->tunables->rtg_boost_freq;
-		if (!boost_freq || (!have_governor_per_policy() && sg_cpu->cpu >= 4))
-			boost_freq = extreme_plus_default_rtg_boost(sg_policy->policy);
-		sg_policy->rtg_boost_util = target_util(sg_policy, boost_freq);
+		boost_util = target_util(sg_policy,
+				    sg_policy->tunables->rtg_boost_freq);
+		sg_policy->rtg_boost_util = boost_util;
 	}
 
-	extreme_plus_iowait_boost(sg_cpu, time, flags);
+	sugov_iowait_boost(sg_cpu, time, flags);
 	sg_cpu->last_update = time;
 
-	extreme_plus_calc_avg_cap(sg_policy, sg_cpu->walt_load.ws,
+	sugov_calc_avg_cap(sg_policy, sg_cpu->walt_load.ws,
 			   sg_policy->policy->cur);
 	ignore_dl_rate_limit(sg_cpu, sg_policy);
 
@@ -1158,40 +844,40 @@ extreme_plus_update_shared(struct update_util_data *hook, u64 time, unsigned int
 				sg_cpu->walt_load.pl,
 				sg_cpu->walt_load.rtgb_active, flags);
 
-	if (extreme_plus_should_update_freq(sg_policy, time) &&
+	if (sugov_should_update_freq(sg_policy, time) &&
 	    !(flags & SCHED_CPUFREQ_CONTINUE)) {
-		next_f = extreme_plus_next_freq_shared(sg_cpu, time);
+		next_f = sugov_next_freq_shared(sg_cpu, time);
 
 		if (sg_policy->policy->fast_switch_enabled)
-			extreme_plus_fast_switch(sg_policy, time, next_f);
+			sugov_fast_switch(sg_policy, time, next_f);
 		else
-			extreme_plus_deferred_update(sg_policy, time, next_f);
+			sugov_deferred_update(sg_policy, time, next_f);
 	}
 
 	raw_spin_unlock(&sg_policy->update_lock);
 }
 
-static void extreme_plus_work(struct kthread_work *work)
+static void sugov_work(struct kthread_work *work)
 {
-	struct extreme_plus_policy *sg_policy = container_of(work, struct extreme_plus_policy, work);
+	struct sugov_policy *sg_policy = container_of(work, struct sugov_policy, work);
 	unsigned int freq;
 	unsigned long flags;
 
 	/*
 	 * Hold sg_policy->update_lock shortly to handle the case where:
 	 * incase sg_policy->next_freq is read here, and then updated by
-	 * extreme_plus_deferred_update() just before work_in_progress is set to false
+	 * sugov_deferred_update() just before work_in_progress is set to false
 	 * here, we may miss queueing the new update.
 	 *
 	 * Note: If a work was queued after the update_lock is released,
-	 * extreme_plus_work() will just be called again by kthread_work code; and the
+	 * sugov_work() will just be called again by kthread_work code; and the
 	 * request will be proceed before the sugov thread sleeps.
 	 */
 	raw_spin_lock_irqsave(&sg_policy->update_lock, flags);
 	freq = sg_policy->next_freq;
 	if (use_pelt())
 		sg_policy->work_in_progress = false;
-	extreme_plus_track_cycles(sg_policy, sg_policy->policy->cur,
+	sugov_track_cycles(sg_policy, sg_policy->policy->cur,
 			   ktime_get_ns());
 	raw_spin_unlock_irqrestore(&sg_policy->update_lock, flags);
 
@@ -1200,28 +886,28 @@ static void extreme_plus_work(struct kthread_work *work)
 	mutex_unlock(&sg_policy->work_lock);
 }
 
-static void extreme_plus_irq_work(struct irq_work *irq_work)
+static void sugov_irq_work(struct irq_work *irq_work)
 {
-	struct extreme_plus_policy *sg_policy;
+	struct sugov_policy *sg_policy;
 
-	sg_policy = container_of(irq_work, struct extreme_plus_policy, irq_work);
+	sg_policy = container_of(irq_work, struct sugov_policy, irq_work);
 
 	kthread_queue_work(&sg_policy->worker, &sg_policy->work);
 }
 
 /************************** sysfs interface ************************/
 
-static struct extreme_plus_tunables *global_tunables;
+static struct sugov_tunables *global_tunables;
 static DEFINE_MUTEX(global_tunables_lock);
 
-static inline struct extreme_plus_tunables *to_extreme_plus_tunables(struct gov_attr_set *attr_set)
+static inline struct sugov_tunables *to_sugov_tunables(struct gov_attr_set *attr_set)
 {
-	return container_of(attr_set, struct extreme_plus_tunables, attr_set);
+	return container_of(attr_set, struct sugov_tunables, attr_set);
 }
 
 static DEFINE_MUTEX(min_rate_lock);
 
-static void update_min_rate_limit_ns(struct extreme_plus_policy *sg_policy)
+static void update_min_rate_limit_ns(struct sugov_policy *sg_policy)
 {
 	mutex_lock(&min_rate_lock);
 	sg_policy->min_rate_limit_ns = min(sg_policy->up_rate_delay_ns,
@@ -1231,14 +917,14 @@ static void update_min_rate_limit_ns(struct extreme_plus_policy *sg_policy)
 
 static ssize_t up_rate_limit_us_show(struct gov_attr_set *attr_set, char *buf)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", tunables->up_rate_limit_us);
 }
 
 static ssize_t down_rate_limit_us_show(struct gov_attr_set *attr_set, char *buf)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", tunables->down_rate_limit_us);
 }
@@ -1246,8 +932,8 @@ static ssize_t down_rate_limit_us_show(struct gov_attr_set *attr_set, char *buf)
 static ssize_t up_rate_limit_us_store(struct gov_attr_set *attr_set,
 				      const char *buf, size_t count)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
-	struct extreme_plus_policy *sg_policy;
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
+	struct sugov_policy *sg_policy;
 	unsigned int rate_limit_us;
 
 	if (task_is_booster(current))
@@ -1269,8 +955,8 @@ static ssize_t up_rate_limit_us_store(struct gov_attr_set *attr_set,
 static ssize_t down_rate_limit_us_store(struct gov_attr_set *attr_set,
 					const char *buf, size_t count)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
-	struct extreme_plus_policy *sg_policy;
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
+	struct sugov_policy *sg_policy;
 	unsigned int rate_limit_us;
 
 	if (task_is_booster(current))
@@ -1294,7 +980,7 @@ static struct governor_attr down_rate_limit_us = __ATTR_RW(down_rate_limit_us);
 
 static ssize_t hispeed_load_show(struct gov_attr_set *attr_set, char *buf)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", tunables->hispeed_load);
 }
@@ -1302,7 +988,7 @@ static ssize_t hispeed_load_show(struct gov_attr_set *attr_set, char *buf)
 static ssize_t hispeed_load_store(struct gov_attr_set *attr_set,
 				  const char *buf, size_t count)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	if (kstrtouint(buf, 10, &tunables->hispeed_load))
 		return -EINVAL;
@@ -1314,7 +1000,7 @@ static ssize_t hispeed_load_store(struct gov_attr_set *attr_set,
 
 static ssize_t hispeed_freq_show(struct gov_attr_set *attr_set, char *buf)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", tunables->hispeed_freq);
 }
@@ -1322,9 +1008,9 @@ static ssize_t hispeed_freq_show(struct gov_attr_set *attr_set, char *buf)
 static ssize_t hispeed_freq_store(struct gov_attr_set *attr_set,
 					const char *buf, size_t count)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 	unsigned int val;
-	struct extreme_plus_policy *sg_policy;
+	struct sugov_policy *sg_policy;
 	unsigned long hs_util;
 	unsigned long flags;
 
@@ -1345,7 +1031,7 @@ static ssize_t hispeed_freq_store(struct gov_attr_set *attr_set,
 
 static ssize_t rtg_boost_freq_show(struct gov_attr_set *attr_set, char *buf)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", tunables->rtg_boost_freq);
 }
@@ -1353,9 +1039,9 @@ static ssize_t rtg_boost_freq_show(struct gov_attr_set *attr_set, char *buf)
 static ssize_t rtg_boost_freq_store(struct gov_attr_set *attr_set,
 				    const char *buf, size_t count)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 	unsigned int val;
-	struct extreme_plus_policy *sg_policy;
+	struct sugov_policy *sg_policy;
 	unsigned long boost_util;
 	unsigned long flags;
 
@@ -1376,7 +1062,7 @@ static ssize_t rtg_boost_freq_store(struct gov_attr_set *attr_set,
 
 static ssize_t pl_show(struct gov_attr_set *attr_set, char *buf)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", tunables->pl);
 }
@@ -1384,7 +1070,7 @@ static ssize_t pl_show(struct gov_attr_set *attr_set, char *buf)
 static ssize_t pl_store(struct gov_attr_set *attr_set, const char *buf,
 				   size_t count)
 {
-	struct extreme_plus_tunables *tunables = to_extreme_plus_tunables(attr_set);
+	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
 
 	if (kstrtobool(buf, &tunables->pl))
 		return -EINVAL;
@@ -1397,7 +1083,7 @@ static struct governor_attr hispeed_freq = __ATTR_RW(hispeed_freq);
 static struct governor_attr rtg_boost_freq = __ATTR_RW(rtg_boost_freq);
 static struct governor_attr pl = __ATTR_RW(pl);
 
-static struct attribute *extreme_plus_attributes[] = {
+static struct attribute *sugov_attributes[] = {
 	&up_rate_limit_us.attr,
 	&down_rate_limit_us.attr,
 	&hispeed_load.attr,
@@ -1407,26 +1093,25 @@ static struct attribute *extreme_plus_attributes[] = {
 	NULL
 };
 
-static void extreme_plus_tunables_free(struct kobject *kobj)
+static void sugov_tunables_free(struct kobject *kobj)
 {
 	struct gov_attr_set *attr_set = container_of(kobj, struct gov_attr_set, kobj);
 
-	kfree(to_extreme_plus_tunables(attr_set));
+	kfree(to_sugov_tunables(attr_set));
 }
 
-static struct kobj_type extreme_plus_tunables_ktype = {
-	.default_attrs = extreme_plus_attributes,
+static struct kobj_type sugov_tunables_ktype = {
+	.default_attrs = sugov_attributes,
 	.sysfs_ops = &governor_sysfs_ops,
-	.release = &extreme_plus_tunables_free,
+	.release = &sugov_tunables_free,
 };
 
 /********************** cpufreq governor interface *********************/
 
-static struct cpufreq_governor extreme_plus_gov;
 
-static struct extreme_plus_policy *extreme_plus_policy_alloc(struct cpufreq_policy *policy)
+static struct sugov_policy *sugov_policy_alloc(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy;
+	struct sugov_policy *sg_policy;
 
 	sg_policy = kzalloc(sizeof(*sg_policy), GFP_KERNEL);
 	if (!sg_policy)
@@ -1437,12 +1122,12 @@ static struct extreme_plus_policy *extreme_plus_policy_alloc(struct cpufreq_poli
 	return sg_policy;
 }
 
-static void extreme_plus_policy_free(struct extreme_plus_policy *sg_policy)
+static void sugov_policy_free(struct sugov_policy *sg_policy)
 {
 	kfree(sg_policy);
 }
 
-static int extreme_plus_kthread_create(struct extreme_plus_policy *sg_policy)
+static int sugov_kthread_create(struct sugov_policy *sg_policy)
 {
 	struct task_struct *thread;
 	struct sched_param param = { .sched_priority = MAX_USER_RT_PRIO / 2 };
@@ -1453,7 +1138,7 @@ static int extreme_plus_kthread_create(struct extreme_plus_policy *sg_policy)
 	if (policy->fast_switch_enabled)
 		return 0;
 
-	kthread_init_work(&sg_policy->work, extreme_plus_work);
+	kthread_init_work(&sg_policy->work, sugov_work);
 	kthread_init_worker(&sg_policy->worker);
 	thread = kthread_create(kthread_worker_fn, &sg_policy->worker,
 				"sugov:%d",
@@ -1472,7 +1157,7 @@ static int extreme_plus_kthread_create(struct extreme_plus_policy *sg_policy)
 
 	sg_policy->thread = thread;
 	kthread_bind_mask(thread, policy->related_cpus);
-	init_irq_work(&sg_policy->irq_work, extreme_plus_irq_work);
+	init_irq_work(&sg_policy->irq_work, sugov_irq_work);
 	mutex_init(&sg_policy->work_lock);
 
 	wake_up_process(thread);
@@ -1480,7 +1165,7 @@ static int extreme_plus_kthread_create(struct extreme_plus_policy *sg_policy)
 	return 0;
 }
 
-static void extreme_plus_kthread_stop(struct extreme_plus_policy *sg_policy)
+static void sugov_kthread_stop(struct sugov_policy *sg_policy)
 {
 	/* kthread only required for slow path */
 	if (sg_policy->policy->fast_switch_enabled)
@@ -1491,9 +1176,9 @@ static void extreme_plus_kthread_stop(struct extreme_plus_policy *sg_policy)
 	mutex_destroy(&sg_policy->work_lock);
 }
 
-static struct extreme_plus_tunables *extreme_plus_tunables_alloc(struct extreme_plus_policy *sg_policy)
+static struct sugov_tunables *sugov_tunables_alloc(struct sugov_policy *sg_policy)
 {
-	struct extreme_plus_tunables *tunables;
+	struct sugov_tunables *tunables;
 
 	tunables = kzalloc(sizeof(*tunables), GFP_KERNEL);
 	if (tunables) {
@@ -1504,11 +1189,11 @@ static struct extreme_plus_tunables *extreme_plus_tunables_alloc(struct extreme_
 	return tunables;
 }
 
-static void extreme_plus_tunables_save(struct cpufreq_policy *policy,
-		struct extreme_plus_tunables *tunables)
+static void sugov_tunables_save(struct cpufreq_policy *policy,
+		struct sugov_tunables *tunables)
 {
 	int cpu;
-	struct extreme_plus_tunables *cached = per_cpu(cached_tunables, policy->cpu);
+	struct sugov_tunables *cached = per_cpu(cached_tunables, policy->cpu);
 
 	if (!have_governor_per_policy())
 		return;
@@ -1530,17 +1215,17 @@ static void extreme_plus_tunables_save(struct cpufreq_policy *policy,
 	cached->down_rate_limit_us = tunables->down_rate_limit_us;
 }
 
-static void extreme_plus_clear_global_tunables(void)
+static void sugov_clear_global_tunables(void)
 {
 	if (!have_governor_per_policy())
 		global_tunables = NULL;
 }
 
-static void extreme_plus_tunables_restore(struct cpufreq_policy *policy)
+static void sugov_tunables_restore(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy = policy->governor_data;
-	struct extreme_plus_tunables *tunables = sg_policy->tunables;
-	struct extreme_plus_tunables *cached = per_cpu(cached_tunables, policy->cpu);
+	struct sugov_policy *sg_policy = policy->governor_data;
+	struct sugov_tunables *tunables = sg_policy->tunables;
+	struct sugov_tunables *cached = per_cpu(cached_tunables, policy->cpu);
 
 	if (!cached)
 		return;
@@ -1553,10 +1238,10 @@ static void extreme_plus_tunables_restore(struct cpufreq_policy *policy)
 	tunables->down_rate_limit_us = cached->down_rate_limit_us;
 }
 
-static int extreme_plus_init(struct cpufreq_policy *policy)
+static int sugov_init(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy;
-	struct extreme_plus_tunables *tunables;
+	struct sugov_policy *sg_policy;
+	struct sugov_tunables *tunables;
 	unsigned long util;
 	int ret = 0;
 
@@ -1566,13 +1251,13 @@ static int extreme_plus_init(struct cpufreq_policy *policy)
 
 	cpufreq_enable_fast_switch(policy);
 
-	sg_policy = extreme_plus_policy_alloc(policy);
+	sg_policy = sugov_policy_alloc(policy);
 	if (!sg_policy) {
 		ret = -ENOMEM;
 		goto disable_fast_switch;
 	}
 
-	ret = extreme_plus_kthread_create(sg_policy);
+	ret = sugov_kthread_create(sg_policy);
 	if (ret)
 		goto free_sg_policy;
 
@@ -1587,52 +1272,45 @@ static int extreme_plus_init(struct cpufreq_policy *policy)
 		sg_policy->tunables = global_tunables;
 
 		gov_attr_set_get(&global_tunables->attr_set, &sg_policy->tunables_hook);
-
-		/* Multi-cluster Heterogeneous Calibration: Initialize per-cluster targets */
-		util = target_util(sg_policy, extreme_plus_default_rtg_boost(policy));
-		sg_policy->rtg_boost_util = util;
-		sg_policy->hispeed_util = target_util(sg_policy, extreme_plus_default_hispeed(policy));
 		goto out;
 	}
 
-	tunables = extreme_plus_tunables_alloc(sg_policy);
+	tunables = sugov_tunables_alloc(sg_policy);
 	if (!tunables) {
 		ret = -ENOMEM;
 		goto stop_kthread;
 	}
 
-	tunables->up_rate_limit_us = 0;
-	tunables->down_rate_limit_us = 5000;
-	tunables->hispeed_load = 65;
+	/*
+	 * Match the stock AstideLabs schedutil defaults.  A profile switch
+	 * only lowers the maximum ceiling and adjusts the rate limits; it
+	 * never forces a frequency or a minimum.
+	 */
+	tunables->up_rate_limit_us = CONFIG_SCHEDUTIL_UP_RATE_LIMIT;
+	tunables->down_rate_limit_us = CONFIG_SCHEDUTIL_DOWN_RATE_LIMIT;
+	tunables->hispeed_load = 90;
+	tunables->hispeed_freq = 0;
 
-	switch (policy->cpu) {
-	default:
-	case 0:
-		tunables->rtg_boost_freq = DEFAULT_CPU0_RTG_BOOST_FREQ;
-		tunables->hispeed_freq = 1056000;
-		break;
-	case 4:
-		tunables->rtg_boost_freq = DEFAULT_CPU4_RTG_BOOST_FREQ;
-		tunables->hispeed_freq = 1804800;
-		break;
-	case 7:
-		tunables->rtg_boost_freq = DEFAULT_CPU7_RTG_BOOST_FREQ;
-		tunables->hispeed_freq = 2169600;
-		break;
-	}
+	/*
+	 * Keep the stock Little RTG boost.  Gold and Prime stay at stock
+	 * (no RTG floor) so they can drop to the lowest OPP when idle.
+	 */
+	if (policy->cpu == 0)
+		tunables->rtg_boost_freq = EXTREME_LITTLE_RTG_BOOST_FREQ;
+	else
+		tunables->rtg_boost_freq = 0;
 
 	policy->governor_data = sg_policy;
 	sg_policy->tunables = tunables;
 
 	util = target_util(sg_policy, sg_policy->tunables->rtg_boost_freq);
 	sg_policy->rtg_boost_util = util;
-	sg_policy->hispeed_util = target_util(sg_policy, sg_policy->tunables->hispeed_freq);
 
 	stale_ns = sched_ravg_window + (sched_ravg_window >> 3);
 
-	extreme_plus_tunables_restore(policy);
+	sugov_tunables_restore(policy);
 
-	ret = kobject_init_and_add(&tunables->attr_set.kobj, &extreme_plus_tunables_ktype,
+	ret = kobject_init_and_add(&tunables->attr_set.kobj, &sugov_tunables_ktype,
 				   get_governor_parent_kobj(policy), "%s",
 				   extreme_plus_gov.name);
 	if (ret)
@@ -1645,14 +1323,14 @@ out:
 fail:
 	kobject_put(&tunables->attr_set.kobj);
 	policy->governor_data = NULL;
-	extreme_plus_clear_global_tunables();
+	sugov_clear_global_tunables();
 
 stop_kthread:
-	extreme_plus_kthread_stop(sg_policy);
+	sugov_kthread_stop(sg_policy);
 	mutex_unlock(&global_tunables_lock);
 
 free_sg_policy:
-	extreme_plus_policy_free(sg_policy);
+	sugov_policy_free(sg_policy);
 
 disable_fast_switch:
 	cpufreq_disable_fast_switch(policy);
@@ -1661,10 +1339,10 @@ disable_fast_switch:
 	return ret;
 }
 
-static void extreme_plus_exit(struct cpufreq_policy *policy)
+static void sugov_exit(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy = policy->governor_data;
-	struct extreme_plus_tunables *tunables = sg_policy->tunables;
+	struct sugov_policy *sg_policy = policy->governor_data;
+	struct sugov_tunables *tunables = sg_policy->tunables;
 	unsigned int count;
 
 	mutex_lock(&global_tunables_lock);
@@ -1672,20 +1350,20 @@ static void extreme_plus_exit(struct cpufreq_policy *policy)
 	count = gov_attr_set_put(&tunables->attr_set, &sg_policy->tunables_hook);
 	policy->governor_data = NULL;
 	if (!count) {
-		extreme_plus_tunables_save(policy, tunables);
-		extreme_plus_clear_global_tunables();
+		sugov_tunables_save(policy, tunables);
+		sugov_clear_global_tunables();
 	}
 
 	mutex_unlock(&global_tunables_lock);
 
-	extreme_plus_kthread_stop(sg_policy);
-	extreme_plus_policy_free(sg_policy);
+	sugov_kthread_stop(sg_policy);
+	sugov_policy_free(sg_policy);
 	cpufreq_disable_fast_switch(policy);
 }
 
-static int extreme_plus_start(struct cpufreq_policy *policy)
+static int sugov_start(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy = policy->governor_data;
+	struct sugov_policy *sg_policy = policy->governor_data;
 	unsigned int cpu;
 
 	sg_policy->up_rate_delay_ns =
@@ -1700,12 +1378,9 @@ static int extreme_plus_start(struct cpufreq_policy *policy)
 	sg_policy->need_freq_update		= false;
 	sg_policy->cached_raw_freq		= 0;
 	sg_policy->prev_cached_raw_freq		= 0;
-	sg_policy->prev_raw_util		= 0;
-	sg_policy->prev_slope_time		= 0;
-	sg_policy->turbo_until			= 0;
 
 	for_each_cpu(cpu, policy->cpus) {
-		struct extreme_plus_cpu *sg_cpu = &per_cpu(extreme_plus_cpu, cpu);
+		struct sugov_cpu *sg_cpu = &per_cpu(sugov_cpu, cpu);
 
 		memset(sg_cpu, 0, sizeof(*sg_cpu));
 		sg_cpu->cpu			= cpu;
@@ -1716,19 +1391,19 @@ static int extreme_plus_start(struct cpufreq_policy *policy)
 	}
 
 	for_each_cpu(cpu, policy->cpus) {
-		struct extreme_plus_cpu *sg_cpu = &per_cpu(extreme_plus_cpu, cpu);
+		struct sugov_cpu *sg_cpu = &per_cpu(sugov_cpu, cpu);
 
 		cpufreq_add_update_util_hook(cpu, &sg_cpu->update_util,
 					     policy_is_shared(policy) ?
-							extreme_plus_update_shared :
-							extreme_plus_update_single);
+							sugov_update_shared :
+							sugov_update_single);
 	}
 	return 0;
 }
 
-static void extreme_plus_stop(struct cpufreq_policy *policy)
+static void sugov_stop(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy = policy->governor_data;
+	struct sugov_policy *sg_policy = policy->governor_data;
 	unsigned int cpu;
 
 	for_each_cpu(cpu, policy->cpus)
@@ -1742,30 +1417,19 @@ static void extreme_plus_stop(struct cpufreq_policy *policy)
 	}
 }
 
-static void extreme_plus_limits(struct cpufreq_policy *policy)
+static void sugov_limits(struct cpufreq_policy *policy)
 {
-	struct extreme_plus_policy *sg_policy = policy->governor_data;
+	struct sugov_policy *sg_policy = policy->governor_data;
 	unsigned long flags, now;
 	unsigned int freq;
-	int profile = READ_ONCE(extreme_profile_mode);
 
-	/* Enforce active profile ceiling so userspace daemon resets cannot leak 3.19GHz */
-	if (policy->cpu == 7) {
-		if (profile == EXTREME_PROFILE_BALANCED && policy->max > EXTREME_PRIME_BALANCED_MAX)
-			policy->max = EXTREME_PRIME_BALANCED_MAX;
-		else if (profile == EXTREME_PROFILE_BATTERY && policy->max > EXTREME_PRIME_BATTERY_MAX)
-			policy->max = EXTREME_PRIME_BATTERY_MAX;
-	} else if (policy->cpu == 4) {
-		if (profile == EXTREME_PROFILE_BALANCED && policy->max > EXTREME_GOLD_BALANCED_MAX)
-			policy->max = EXTREME_GOLD_BALANCED_MAX;
-		else if (profile == EXTREME_PROFILE_BATTERY && policy->max > EXTREME_GOLD_BATTERY_MAX)
-			policy->max = EXTREME_GOLD_BATTERY_MAX;
-	}
+	if (!sg_policy)
+		return;
 
 	if (!policy->fast_switch_enabled) {
 		mutex_lock(&sg_policy->work_lock);
 		raw_spin_lock_irqsave(&sg_policy->update_lock, flags);
-		extreme_plus_track_cycles(sg_policy, sg_policy->policy->cur,
+		sugov_track_cycles(sg_policy, sg_policy->policy->cur,
 				   ktime_get_ns());
 		raw_spin_unlock_irqrestore(&sg_policy->update_lock, flags);
 		cpufreq_policy_apply_limits(policy);
@@ -1781,8 +1445,7 @@ static void extreme_plus_limits(struct cpufreq_policy *policy)
 		 */
 		freq = cpufreq_driver_resolve_freq(policy, freq);
 		sg_policy->cached_raw_freq = freq;
-		sg_policy->need_freq_update = true;
-		extreme_plus_fast_switch(sg_policy, now, freq);
+		sugov_fast_switch(sg_policy, now, freq);
 		raw_spin_unlock_irqrestore(&sg_policy->update_lock, flags);
 	}
 
@@ -1791,7 +1454,7 @@ static void extreme_plus_limits(struct cpufreq_policy *policy)
 	 * of policy limits in cpufreq_set_policy() or a policy limits update
 	 * might be missed, so use a memory barrier to ensure it.
 	 *
-	 * This pairs with the memory barrier in extreme_plus_should_update_freq().
+	 * This pairs with the memory barrier in sugov_should_update_freq().
 	 */
 	smp_wmb();
 
@@ -1802,113 +1465,165 @@ static struct cpufreq_governor extreme_plus_gov = {
 	.name			= "extreme+",
 	.owner			= THIS_MODULE,
 	.dynamic_switching	= true,
-	.init			= extreme_plus_init,
-	.exit			= extreme_plus_exit,
-	.start			= extreme_plus_start,
-	.stop			= extreme_plus_stop,
-	.limits			= extreme_plus_limits,
+	.init			= sugov_init,
+	.exit			= sugov_exit,
+	.start			= sugov_start,
+	.stop			= sugov_stop,
+	.limits			= sugov_limits,
 };
 
-#ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
-struct cpufreq_governor *cpufreq_default_governor(void)
-{
-	return &extreme_plus_gov;
-}
-#endif
 
-/*
- * ═══════════════════════════════════════════════════════════════════════════════
- * PROJECT EXTREME++ (BMW Edition) — In-Kernel Dynamic Profile Switcher
- * ═══════════════════════════════════════════════════════════════════════════════
- * Profile 0 (Gaming / Default): Prime up to 3.19 GHz (3187200 kHz), Gold up to 2.42 GHz
- * Profile 1 (Balanced):         Prime clamped to 2.84 GHz (2841600 kHz), Gold to 2.25 GHz
- * Profile 2 (Battery):          Prime clamped to 2.42 GHz (2419200 kHz), Gold to 1.96 GHz
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+/* ---------------------------- EKM profile control ------------------------ */
+
+static void extreme_profile_set_policy(unsigned int cpu, unsigned int max_freq,
+				       unsigned int up_us, unsigned int down_us,
+				       unsigned int hispeed_load,
+				       unsigned int hispeed_freq,
+				       unsigned int rtg_boost_freq)
+{
+	struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
+	struct sugov_policy *sg_policy;
+
+	if (!policy)
+		return;
+
+	down_write(&policy->rwsem);
+
+	if (max_freq) {
+		if (max_freq > policy->cpuinfo.max_freq)
+			max_freq = policy->cpuinfo.max_freq;
+		if (max_freq < policy->min)
+			max_freq = policy->min;
+		policy->user_policy.max = max_freq;
+	}
+
+	if (policy->governor == &extreme_plus_gov && policy->governor_data) {
+		sg_policy = policy->governor_data;
+		if (sg_policy->tunables) {
+			sg_policy->tunables->up_rate_limit_us = up_us;
+			sg_policy->tunables->down_rate_limit_us = down_us;
+			sg_policy->tunables->hispeed_load = hispeed_load;
+			sg_policy->tunables->hispeed_freq = hispeed_freq;
+			sg_policy->tunables->rtg_boost_freq = rtg_boost_freq;
+			sg_policy->up_rate_delay_ns = up_us * NSEC_PER_USEC;
+			sg_policy->down_rate_delay_ns =
+				down_us * NSEC_PER_USEC;
+			update_min_rate_limit_ns(sg_policy);
+			sg_policy->hispeed_util = target_util(sg_policy,
+				sg_policy->tunables->hispeed_freq);
+			sg_policy->rtg_boost_util = target_util(sg_policy,
+				sg_policy->tunables->rtg_boost_freq);
+			sg_policy->need_freq_update = true;
+			WRITE_ONCE(sg_policy->limits_changed, true);
+			smp_mb();
+		}
+	}
+
+	up_write(&policy->rwsem);
+	cpufreq_update_policy(cpu);
+	cpufreq_cpu_put(policy);
+}
+
 static void extreme_profile_apply(int mode)
 {
-	struct cpufreq_policy *policy;
 	unsigned int prime_max_freq;
 	unsigned int gold_max_freq;
+	unsigned int up_delay_us;
+	unsigned int down_delay_us;
+	unsigned int hispeed_load;
 
 	switch (mode) {
 	case EXTREME_PROFILE_BALANCED:
 		prime_max_freq = EXTREME_PRIME_BALANCED_MAX;
 		gold_max_freq = EXTREME_GOLD_BALANCED_MAX;
+		up_delay_us = 500;
+		down_delay_us = 20000;
+		hispeed_load = 90;
 		break;
 	case EXTREME_PROFILE_BATTERY:
 		prime_max_freq = EXTREME_PRIME_BATTERY_MAX;
 		gold_max_freq = EXTREME_GOLD_BATTERY_MAX;
+		up_delay_us = 1000;
+		down_delay_us = 20000;
+		hispeed_load = 95;
 		break;
 	case EXTREME_PROFILE_GAMING:
 	default:
 		prime_max_freq = EXTREME_PRIME_STOCK_MAX;
 		gold_max_freq = EXTREME_GOLD_STOCK_MAX;
+		up_delay_us = 500;
+		down_delay_us = 20000;
+		hispeed_load = 90;
 		break;
 	}
 
-	/* Update Prime Core (CPU 7 / Policy 7) */
-	policy = cpufreq_cpu_get(7);
-	if (policy) {
-		if (prime_max_freq > policy->cpuinfo.max_freq)
-			prime_max_freq = policy->cpuinfo.max_freq;
-		if (prime_max_freq < policy->min)
-			prime_max_freq = policy->min;
-		down_write(&policy->rwsem);
-		policy->user_policy.max = prime_max_freq;
-		policy->max = prime_max_freq;
-		if (policy->governor == &extreme_plus_gov && policy->governor_data) {
-			struct extreme_plus_policy *sg_policy = policy->governor_data;
-			sg_policy->need_freq_update = true;
-			WRITE_ONCE(sg_policy->limits_changed, true);
-		}
-		up_write(&policy->rwsem);
-		cpufreq_cpu_put(policy);
-	}
+	extreme_profile_set_policy(7, prime_max_freq, up_delay_us, down_delay_us,
+				   hispeed_load, 0, 0);
+	extreme_profile_set_policy(4, gold_max_freq, up_delay_us, down_delay_us,
+				   hispeed_load, 0, 0);
+	extreme_profile_set_policy(0, 0, up_delay_us, down_delay_us,
+				   hispeed_load, 0,
+				   EXTREME_LITTLE_RTG_BOOST_FREQ);
 
-	/* Update Gold Cores (CPU 4-6 / Policy 4) */
-	policy = cpufreq_cpu_get(4);
-	if (policy) {
-		if (gold_max_freq > policy->cpuinfo.max_freq)
-			gold_max_freq = policy->cpuinfo.max_freq;
-		if (gold_max_freq < policy->min)
-			gold_max_freq = policy->min;
-		down_write(&policy->rwsem);
-		policy->user_policy.max = gold_max_freq;
-		policy->max = gold_max_freq;
-		if (policy->governor == &extreme_plus_gov && policy->governor_data) {
-			struct extreme_plus_policy *sg_policy = policy->governor_data;
-			sg_policy->need_freq_update = true;
-			WRITE_ONCE(sg_policy->limits_changed, true);
-		}
-		up_write(&policy->rwsem);
-		cpufreq_cpu_put(policy);
-	}
-
-	pr_info("EXTREME++ BMW Edition: Profile switched to %d (Prime target: %u kHz, Gold target: %u kHz)\n",
-		mode, prime_max_freq, gold_max_freq);
+	pr_info("EXTREME++ EKM: profile %d (Prime %u kHz, Gold %u kHz, up %u us, down %u us)\n",
+		mode, prime_max_freq, gold_max_freq, up_delay_us, down_delay_us);
 }
 
 static ssize_t extreme_profile_show(struct kobject *kobj,
 				    struct kobj_attribute *attr, char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "%d\n", extreme_profile_mode);
+	(void)kobj;
+	(void)attr;
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			 READ_ONCE(extreme_profile_mode));
+}
+
+static bool extreme_profile_name_eq(const char *buf, const char *name)
+{
+	size_t len = strlen(name);
+
+	if (strncasecmp(buf, name, len))
+		return false;
+
+	return buf[len] == '\0' || buf[len] == '\n';
 }
 
 static ssize_t extreme_profile_store(struct kobject *kobj,
 				     struct kobj_attribute *attr,
 				     const char *buf, size_t count)
 {
-	int val;
+	int val = -1;
 
-	if (kstrtoint(buf, 10, &val) < 0)
+	(void)kobj;
+	(void)attr;
+
+	if (!buf || count == 0)
 		return -EINVAL;
 
-	if (val < 0 || val > 2)
+	if (extreme_profile_name_eq(buf, "0") ||
+	    extreme_profile_name_eq(buf, "gaming") ||
+	    extreme_profile_name_eq(buf, "performance") ||
+	    extreme_profile_name_eq(buf, "perf"))
+		val = EXTREME_PROFILE_GAMING;
+	else if (extreme_profile_name_eq(buf, "1") ||
+		 extreme_profile_name_eq(buf, "balanced") ||
+		 extreme_profile_name_eq(buf, "bal") ||
+		 extreme_profile_name_eq(buf, "default"))
+		val = EXTREME_PROFILE_BALANCED;
+	else if (extreme_profile_name_eq(buf, "2") ||
+		 extreme_profile_name_eq(buf, "battery") ||
+		 extreme_profile_name_eq(buf, "powersave") ||
+		 extreme_profile_name_eq(buf, "bat"))
+		val = EXTREME_PROFILE_BATTERY;
+	else if (kstrtoint(buf, 10, &val) == 0) {
+		if (val < 0 || val > 2)
+			return -EINVAL;
+	} else {
 		return -EINVAL;
+	}
 
 	mutex_lock(&extreme_profile_lock);
-	extreme_profile_mode = val;
+	WRITE_ONCE(extreme_profile_mode, val);
 	extreme_profile_apply(val);
 	mutex_unlock(&extreme_profile_lock);
 
@@ -1916,35 +1631,11 @@ static ssize_t extreme_profile_store(struct kobject *kobj,
 }
 
 static struct kobj_attribute extreme_profile_kattr =
-	__ATTR(extreme_profile, 0664, extreme_profile_show, extreme_profile_store);
+	__ATTR(extreme_profile, 0664, extreme_profile_show,
+	       extreme_profile_store);
 
-static ssize_t extreme_target_fps_show(struct kobject *kobj,
-				       struct kobj_attribute *attr, char *buf)
-{
-	return scnprintf(buf, PAGE_SIZE, "%d\n", READ_ONCE(extreme_target_fps));
-}
-
-static ssize_t extreme_target_fps_store(struct kobject *kobj,
-					struct kobj_attribute *attr,
-					const char *buf, size_t count)
-{
-	int val;
-
-	if (kstrtoint(buf, 10, &val) < 0)
-		return -EINVAL;
-
-	if (val < EXTREME_FPS_MIN || val > EXTREME_FPS_MAX)
-		return -EINVAL;
-
-	WRITE_ONCE(extreme_target_fps, val);
-	pr_info("extreme+: target FPS -> %d (Prime cruise %u, Gold cruise %u)\n",
-		val, extreme_prime_cruise(), extreme_gold_cruise());
-
-	return count;
-}
-
-static struct kobj_attribute extreme_target_fps_kattr =
-	__ATTR(extreme_target_fps, 0664, extreme_target_fps_show, extreme_target_fps_store);
+static struct kobj_attribute kernel_profile_kattr =
+	__ATTR(profile, 0664, extreme_profile_show, extreme_profile_store);
 
 static int __init extreme_plus_register(void)
 {
@@ -1954,19 +1645,30 @@ static int __init extreme_plus_register(void)
 	if (ret)
 		return ret;
 
+	ret = cpufreq_register_notifier(&extreme_policy_nb,
+					CPUFREQ_POLICY_NOTIFIER);
+	if (ret)
+		pr_warn("EXTREME++: failed to register cpufreq policy notifier\n");
+
 	ret = sysfs_create_file(kernel_kobj, &extreme_profile_kattr.attr);
 	if (ret)
-		pr_warn("EXTREME++: Failed to create /sys/kernel/extreme_profile node\n");
+		pr_warn("EXTREME++: failed to create /sys/kernel/extreme_profile\n");
 	else
-		pr_info("EXTREME++ BMW Edition: /sys/kernel/extreme_profile registered successfully!\n");
+		pr_info("EXTREME++ EKM: /sys/kernel/extreme_profile registered\n");
 
-	ret = sysfs_create_file(kernel_kobj, &extreme_target_fps_kattr.attr);
+	ret = sysfs_create_file(kernel_kobj, &kernel_profile_kattr.attr);
 	if (ret)
-		pr_warn("extreme+: Failed to create /sys/kernel/extreme_target_fps node\n");
+		pr_warn("EXTREME++: failed to create /sys/kernel/profile alias\n");
 	else
-		pr_info("extreme+: /sys/kernel/extreme_target_fps registered (default %d)\n",
-			extreme_target_fps);
+		pr_info("EXTREME++ EKM: /sys/kernel/profile alias registered\n");
 
 	return 0;
 }
 fs_initcall(extreme_plus_register);
+
+#ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_EXTREME_PLUS
+struct cpufreq_governor *cpufreq_default_governor(void)
+{
+	return &extreme_plus_gov;
+}
+#endif
