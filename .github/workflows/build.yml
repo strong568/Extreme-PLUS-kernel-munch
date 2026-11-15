@@ -23,7 +23,6 @@ on:
           - 'both'
           - 'hyperos'
           - 'aosp'
-
 jobs:
   build:
     name: "Compile → Release"
@@ -58,10 +57,13 @@ jobs:
             TARGET_LABEL="AOSP ONLY (Android 13–17 / A16 & A17 Tested)"
           fi
 
+          START_MSG=$(printf '🚀 <b>EXTREME++ Build Started!</b>\n📱 <b>Device:</b> POCO F4 (munch)\n🏎️ <b>Edition:</b> EXTREME++ Gaming (BMW Edition)\n🎯 <b>Target:</b> %s\n%s\n⚡ <b>Default Clock:</b> 3.19 GHz Unlocked Peak (Dynamic Profiles)\n👑 <b>Author:</b> Extreme++ by @pandey_ji_8' "${TARGET_LABEL}" "${ROOT_LABEL}")
+
           for chat in "${TARGETS[@]}"; do
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id="$chat" \
-              -d text="🚀 <b>EXTREME++ Build Started!</b>%0A📱 Device: POCO F4 (munch)%0A🏎️ Edition: EXTREME++ Gaming (BMW Edition)%0A🎯 Target: ${TARGET_LABEL}%0A${ROOT_LABEL}%0A⚡ Default Clock: 3.19 GHz Unlocked Peak (Dynamic Profiles)" -d parse_mode="HTML" || true
+              --data-urlencode "chat_id=$chat" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "text=$START_MSG" || true
           done
 
       - name: "📦 Checkout config repo"
@@ -70,7 +72,7 @@ jobs:
       - name: "🛠️ Install build dependencies"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libncurses5 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip unzip zlib1g-dev python3 python3-pip
 
       - name: "⚡ Setup ZyC-Clang 16"
         run: |
@@ -79,9 +81,15 @@ jobs:
           tar -xzf clang.tar.gz -C $HOME/zyc-clang
           rm clang.tar.gz
 
-      - name: "🌐 Clone kernel source"
+      - name: "🌐 Clone kernel source (Build #125 pinned base)"
         run: |
-          git clone --depth=1 -b android17-aptusitu https://github.com/AstideLabs/android_kernel_xiaomi_sm8250 kernel
+          mkdir kernel && cd kernel
+          git init
+          git remote add origin https://github.com/AstideLabs/android_kernel_xiaomi_sm8250
+          git fetch --depth=1 origin refs/pull/74/merge
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "fcf366797808bcc938a7248cded079cf6ea2e26d"
+          cd ..
 
       - name: "⚙️ Inject PandeyJI Custom Build Script"
         run: |
@@ -117,17 +125,13 @@ jobs:
           OUT_ZIP_DIR="$GITHUB_WORKSPACE/raw_images"
           mkdir -p "$IMG_DIR" "$OUT_ZIP_DIR"
 
-          # Target HyperOS output directory specifically!
+          # HyperOS output directory only. Never fall back to AOSP output.
           HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out_hyperos/arch/arm64/boot"
-          if [ ! -d "$HYPEROS_BOOT" ]; then
-            HYPEROS_BOOT="$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot"
-          fi
 
           if [ -d "$HYPEROS_BOOT" ] && [ -f "$HYPEROS_BOOT/Image" ]; then
-            # 1. Main Kernel Binary (Image & kernel.img)
+            # 1. Main Kernel Binary (do not call this boot.img)
             cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/Image"
-            cp -f "$HYPEROS_BOOT/Image" "$IMG_DIR/kernel.img"
-            echo "  [+] Included Image & kernel.img from $HYPEROS_BOOT/Image ($(du -h "$IMG_DIR/Image" | cut -f1))"
+            echo "  [+] Included Image from $HYPEROS_BOOT/Image ($(du -h "$IMG_DIR/Image" | cut -f1))"
 
             # 2. DTBO Image
             if [ -f "$HYPEROS_BOOT/dtbo.img" ]; then
@@ -164,15 +168,335 @@ jobs:
             echo "ℹ️ HyperOS output not found (e.g. only AOSP was requested). Skipping HyperOS raw images zip."
           fi
 
+      - name: "🔐 Repack HyperOS images from Google Drive"
+        if: success() && (inputs.target_os == 'hyperos' || inputs.target_os == 'both')
+        env:
+          HYPEROSIMGS_URL: ${{ secrets.hyperosimgs || secrets.HYPEROSIMGS }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HYPEROSIMGS_URL:-}" ]; then
+            echo "::error::Google Drive secret 'hyperosimgs' is not set! Required to repack flashable HyperOS 4 images."
+            exit 1
+          fi
+
+          BOOT_DIR="$GITHUB_WORKSPACE/kernel/out_hyperos/arch/arm64/boot"
+
+          if [ ! -f "$BOOT_DIR/Image" ]; then
+            echo "::error::HyperOS Image not found in $BOOT_DIR! Kernel compilation did not produce an Image."
+            exit 1
+          fi
+
+          if [ ! -f "$BOOT_DIR/dtb" ]; then
+            echo "::error::HyperOS dtb not found in $BOOT_DIR! The build must produce arch/arm64/boot/dtb."
+            exit 1
+          fi
+
+          STOCK_DIR="$GITHUB_WORKSPACE/hyperos4_stock"
+          OUT_DIR="$GITHUB_WORKSPACE/hyperos4_images"
+          rm -rf "$STOCK_DIR" "$OUT_DIR"
+          mkdir -p "$STOCK_DIR" "$OUT_DIR"
+
+          python3 -m pip install --user --upgrade gdown cryptography
+          export STOCK_DIR
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          import gdown
+
+          raw = os.environ.get("HYPEROSIMGS_URL", "").strip().strip('"').strip("'")
+          stock_dir = os.environ["STOCK_DIR"]
+          if not raw:
+              print("::error::HYPEROSIMGS_URL is empty!", file=sys.stderr)
+              sys.exit(1)
+
+          # Extract folder ID if present
+          folder_id = None
+          m = re.search(r'/folders/([a-zA-Z0-9_-]+)', raw)
+          if m:
+              folder_id = m.group(1)
+          elif re.search(r'[?&]id=([a-zA-Z0-9_-]+)', raw):
+              folder_id = re.search(r'[?&]id=([a-zA-Z0-9_-]+)', raw).group(1)
+          elif re.search(r'/d/([a-zA-Z0-9_-]+)', raw):
+              folder_id = re.search(r'/d/([a-zA-Z0-9_-]+)', raw).group(1)
+          elif re.fullmatch(r'[a-zA-Z0-9_-]+', raw):
+              folder_id = raw
+
+          print(f"[*] Downloading stock HyperOS 4 images from Google Drive: {raw}")
+
+          success = False
+          if folder_id:
+              try:
+                  print(f"[*] Attempting folder download by ID: {folder_id}")
+                  res = gdown.download_folder(id=folder_id, output=stock_dir, quiet=False, use_cookies=False)
+                  if res:
+                      success = True
+                  else:
+                      print("[*] gdown folder download by ID returned no files", file=sys.stderr)
+              except Exception as exc:
+                  print(f"[*] gdown folder download by ID failed: {exc}", file=sys.stderr)
+
+          if not success:
+              url = raw if raw.startswith(("http://", "https://")) else f"https://drive.google.com/drive/folders/{raw}"
+              try:
+                  print(f"[*] Attempting folder download by URL: {url}")
+                  res = gdown.download_folder(url=url, output=stock_dir, quiet=False, use_cookies=False)
+                  if res:
+                      success = True
+                  else:
+                      print("[*] gdown folder download by URL returned no files", file=sys.stderr)
+              except Exception as exc:
+                  print(f"[*] gdown folder download by URL failed: {exc}", file=sys.stderr)
+
+          if not success and folder_id:
+              try:
+                  print("[*] Attempting file download in case URL is a single archive...")
+                  res = gdown.download(id=folder_id, output=os.path.join(stock_dir, "stock_images.zip"), quiet=False)
+                  if res:
+                      success = True
+              except Exception as exc:
+                  print(f"[*] gdown file download failed: {exc}", file=sys.stderr)
+
+          if not success:
+              print(
+                  "::error::Unable to download the Google Drive stock images. "
+                  "Check that the 'hyperosimgs' secret contains the folder link and the folder is shared as "
+                  "'Anyone with the link - Viewer'.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          PY
+
+          # Extract any downloaded zip archives if present
+          while IFS= read -r -d '' z; do
+            echo "[*] Extracting downloaded archive: $z"
+            if ! unzip -q -o "$z" -d "$STOCK_DIR"; then
+              echo "::error::Failed to extract downloaded archive: $z"
+              exit 1
+            fi
+          done < <(find "$STOCK_DIR" -type f -name "*.zip" -print0 2>/dev/null)
+
+          # Locate and flatten required stock images
+          for img in boot.img vendor_boot.img dtbo.img; do
+            count=$(find "$STOCK_DIR" -type f -name "$img" 2>/dev/null | wc -l)
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one '$img' in the Google Drive files, found $count."
+              echo "Directory tree of $STOCK_DIR:"
+              find "$STOCK_DIR" -maxdepth 3 -ls || true
+              exit 1
+            fi
+            src=$(find "$STOCK_DIR" -type f -name "$img" -print -quit)
+            if [ "$src" != "$STOCK_DIR/$img" ]; then
+              cp -f "$src" "$STOCK_DIR/$img"
+            fi
+            echo "  [+] Found $img: $src ($(du -h "$src" | cut -f1))"
+          done
+
+          chmod +x "$GITHUB_WORKSPACE/patches/avbtool" 2>/dev/null || true
+
+          echo "[*] Running HyperOS image repack tool..."
+          python3 "$GITHUB_WORKSPACE/patches/repack_hyperos_images.py" \
+            --stock-dir "$STOCK_DIR" \
+            --kernel "$BOOT_DIR/Image" \
+            --dtb "$BOOT_DIR/dtb" \
+            --out-dir "$OUT_DIR" \
+            --avbtool "$GITHUB_WORKSPACE/patches/avbtool"
+
+          (
+            cd "$OUT_DIR"
+            sha256sum boot.img vendor_boot.img dtbo.img > SHA256SUMS.txt
+          )
+
+          echo "✅ HyperOS flashable partitioned images prepared under $OUT_DIR:"
+          ls -lh "$OUT_DIR"
+
       - name: "📦 Upload Build Artifacts"
+        id: upload_artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: EXTREME++_BMW_Edition_BETA_${{ github.run_number }}
+          name: EXTREME++_BMW_Edition_${{ github.run_number }}
           path: |
             kernel/EXTREME++*.zip
             raw_images/*.zip
+            hyperos4_images/boot.img
+            hyperos4_images/vendor_boot.img
+            hyperos4_images/dtbo.img
+            hyperos4_images/SHA256SUMS.txt
           if-no-files-found: warn
+
+      - name: "📢 Telegram: HyperOS Images Artifact"
+        if: success() && (inputs.target_os == 'hyperos' || inputs.target_os == 'both')
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_DM_ID: ${{ secrets.TELEGRAM_DM_ID }}
+          ARTIFACT_URL: ${{ steps.upload_artifacts.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_DM_ID:-}" ]; then
+            echo "ℹ️ TELEGRAM_DM_ID is not set. Skipping artifact link DM."
+            exit 0
+          fi
+          if [ ! -f "$GITHUB_WORKSPACE/hyperos4_images/boot.img" ]; then
+            echo "::error::HyperOS 4 images not found in $GITHUB_WORKSPACE/hyperos4_images! Artifact cannot be delivered."
+            exit 1
+          fi
+          ARTIFACT_URL="${ARTIFACT_URL:-https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}}"
+          MSG=$(printf '🚀 <b>EXTREME++ HyperOS 4 Flashable Images</b> [Build #%s]\n\n📱 <b>Device:</b> POCO F4 (munch)\n🏎️ <b>Edition:</b> BMW Edition [Official Stable]\n\n📦 Download partitioned flashable images (<b>boot.img</b>, <b>vendor_boot.img</b>, <b>dtbo.img</b>, <b>SHA256SUMS.txt</b>) from the workflow artifact:\n👉 %s\n\n📁 <b>Artifact Name:</b> EXTREME++_BMW_Edition_%s' \
+            "${GITHUB_RUN_NUMBER}" "${ARTIFACT_URL}" "${GITHUB_RUN_NUMBER}")
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_DM_ID}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "text=${MSG}" >/dev/null || true
+
+      - name: "📱 Fetch Official EKM Companion App APK"
+        if: success()
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/release_assets"
+          echo "[*] Fetching latest EKM APK from PandeyJI-9/extreme-kernel-manager..."
+          EKM_APK_URL=$(curl -s https://api.github.com/repos/PandeyJI-9/extreme-kernel-manager/releases/latest | grep "browser_download_url.*apk" | cut -d : -f 2,3 | tr -d ' "' || true)
+          if [ -n "$EKM_APK_URL" ]; then
+            echo "[+] Downloading from: $EKM_APK_URL"
+            curl -L "$EKM_APK_URL" -o "$GITHUB_WORKSPACE/release_assets/EKM-Extreme-Kernel-Manager.apk"
+          fi
+          if [ ! -f "$GITHUB_WORKSPACE/release_assets/EKM-Extreme-Kernel-Manager.apk" ]; then
+            echo "[*] Fallback: downloading stable v2.1.0 release APK..."
+            curl -L "https://github.com/PandeyJI-9/extreme-kernel-manager/releases/download/v2.1.0/EKM-Extreme-Kernel-Manager-v2.1.0.apk" \
+              -o "$GITHUB_WORKSPACE/release_assets/EKM-Extreme-Kernel-Manager.apk" || true
+          fi
+          echo "✅ EKM Asset prepared:"
+          ls -lh "$GITHUB_WORKSPACE/release_assets"
+
+      - name: "📝 Generate Dynamic Release Notes"
+        if: success()
+        env:
+          INPUT_ROOT_MODE: ${{ inputs.root_mode }}
+          INPUT_TARGET_OS: ${{ inputs.target_os }}
+        run: |
+          cat << 'EOF' > "$GITHUB_WORKSPACE/generate_notes.py"
+          import os, glob
+
+          root_mode = os.environ.get("INPUT_ROOT_MODE", "ksu_susfs")
+          target_os = os.environ.get("INPUT_TARGET_OS", "both")
+          run_number = os.environ.get("GITHUB_RUN_NUMBER", "1")
+
+          # 1. Auto-detect Root Variant Description
+          root_map = {
+              "ksu_susfs": "⚡ **Root Variant:** KowSU Multi-Manager Root (SuSFS v2.3.0 Kernel Stealth)",
+              "ksu_no_susfs": "⚡ **Root Variant:** KowSU Multi-Manager Root (Standard Clean KSU / No SuSFS)",
+              "noroot": "🛡️ **Architecture:** Pure Clean Base (No Root / No SuSFS)",
+              "both": "⚡ **Dual Release:** KowSU + SuSFS v2.3.0 Stealth & Pure Clean Base (No Root)",
+              "all": "🚀 **Complete Suite:** All 3 Root Variants (KowSU + SuSFS v2.3.0, Standard Clean KSU, Pure Clean NoRoot)"
+          }
+          root_desc = root_map.get(root_mode, f"⚡ **Root Variant:** {root_mode}")
+
+          # 2. Auto-detect Target OS Description
+          os_map = {
+              "hyperos": "🟢 **Xiaomi HyperOS ONLY** (HyperOS 1.0 — 4.0 | Android 14 — 17)",
+              "aosp": "⚡ **AOSP Custom ROMs ONLY** (Android 13 — 17 | A15, A16, A17 Tested)",
+              "both": "🎯 **Dual Target:** Xiaomi HyperOS (1.0 — 4.0) + AOSP Custom ROMs (Android 13 — 17)"
+          }
+          os_desc = os_map.get(target_os, target_os)
+
+          # 3. Auto-detect Actual Compiled ZIP Packages
+          zips = sorted(glob.glob("kernel/EXTREME++*.zip"))
+          pkg_lines = []
+          for z in zips:
+              bname = os.path.basename(z)
+              tag = ""
+              if "HyperOS" in bname:
+                  tag = "HyperOS"
+              elif "AOSP" in bname:
+                  tag = "AOSP"
+              
+              if "KowSU_SuSFS" in bname:
+                  tag += " · KowSU + SuSFS v2.3.0"
+              elif "KowSU_NoSuSFS" in bname:
+                  tag += " · Standard Clean KSU"
+              elif "NoRoot" in bname:
+                  tag += " · Pure Clean NoRoot"
+              elif "KowSU" in bname:
+                  tag += " · KowSU Root"
+              pkg_lines.append(f"* 📦 **`{bname}`** ({tag})")
+
+          if os.path.exists("release_assets/EKM-Extreme-Kernel-Manager.apk"):
+              pkg_lines.append("* 📱 **`EKM-Extreme-Kernel-Manager.apk`** (Official Companion App · BMW M-Power UI)")
+
+          packages_block = "\n".join(pkg_lines) if pkg_lines else "* *No packages detected*"
+
+          notes = f"""# 🏎️💨 PROJECT EXTREME++ (BMW EDITION) — OFFICIAL STABLE RELEASE
+          ### Flagship Silicon-Level Performance & Thermal Architecture for POCO F4 (`munch`)
+
+          **Linux 4.19.325-cip135-st19 · Qualcomm Snapdragon 870 5G (`SM8250-AC`) · Built with ZyC-Clang 16 + LLD**
+
+          ---
+
+          ### 📱 Build Configuration (Auto-Detected):
+          * {os_desc}
+          * {root_desc}
+          * 🏷️ **Build Number:** #{run_number}
+          * 🟢 **Release Status:** Official Stable · Production Ready
+
+          ---
+
+          ### 📦 Built Packages in this Release:
+          {packages_block}
+
+          ---
+
+          ### 🛡️ Root Variants Guide (Which one should you flash?):
+          * ⚡ **`KowSU_SuSFS`**: Includes KowSU/ReSukiSU + SuSFS v2.3.0. **Recommended for most rooted users!** Full root capabilities with advanced kernel stealth (kstat spoofing, mount hiding, path hiding, SUS map) to easily pass Play Integrity & banking security.
+          * ⚡ **`KowSU_NoSuSFS`**: Standard clean KernelSU root without SuSFS stealth hooks.
+          * 🛡️ **`NoRoot`**: 100% clean non-rooted kernel. Zero root binaries or hooks in the kernel tree. Ideal for users wanting maximum battery/stock stability and banking app compatibility without root managers.
+
+          ---
+
+          ### ⚡ Key Silicon & Kernel Features:
+          * 🧠 **Native EXTREME+ Governor:** Built directly on Qualcomm CAF WALT Schedutil engine. Active from boot with zero floor locking.
+          * 🎛️ **Dynamic In-Kernel Profiles (`/sys/kernel/extreme_profile`):**
+            * `0` ➔ 🚀 **Gaming (3.19 GHz Prime Monster / 2.42 GHz Gold)** — Locked 120 FPS
+            * `1` ➔ ⚖️ **Balanced (2.84 GHz Prime / 2.25 GHz Gold)** — Sustained 90 FPS & daily efficiency
+            * `2` ➔ 🔋 **Battery (2.42 GHz Prime / 1.96 GHz Gold)** — All-day marathon battery
+          * 📱 **Official EKM Companion App Attached:** Extreme Kernel Manager APK included above with 1-click profiles & Munch AMOLED DC Dimming!
+          * 🎮 **FakeDreamer Adreno 650 GPU Undervolt:** 7 calibrated OPP states (150MHz–670MHz) with DDR Bus Tier 11 (3°C–5°C cooler gaming).
+          * 💾 **Next-Gen Memory:** ZSTD Level-3 ZRAM + Google ACK Critical VMScan Anti-Stutter (SurfaceFlinger bypass).
+          * 🔋 **Hardware Bypass Charging:** Power motherboard directly via `input_suspend` without heating battery + 67W Mi Turbo + Universal PD/PPS.
+          * 📱 **Millet Dual-ABI Netlink Engine:** Fixes 9-sec crash loop, enables genuine deep sleep on HyperOS (compiled out on AOSP for zero bloat).
+          * 🌐 **Low-Latency Gaming Net:** TCP BBR default congestion control + FQ/FQ-CoDel pacing.
+
+          ---
+
+          ### 📲 Flashing & Installation:
+          1. Boot into Custom Recovery (OrangeFox / TWRP).
+          2. Flash the ZIP matching your ROM (`HyperOS` or `AOSP`) and desired Root variant.
+          3. The installer automatically flashes the kernel Image, injects the undervolted GPU DTB to `vendor_boot`, and auto-purges old conflicting `/data/adb` scripts.
+          4. Reboot & Enjoy!
+
+          ---
+          👑 **Maintainer:** PandeyJi ([@pandey_ji_8](https://t.me/pandey_ji_8))  
+          💬 **Telegram Support Community:** https://t.me/Extremeplus_Support
+          """
+
+          with open(os.environ["GITHUB_WORKSPACE"] + "/release_notes.md", "w") as f:
+              f.write(notes)
+          print("✅ Generated dynamic release_notes.md")
+          EOF
+
+          python3 "$GITHUB_WORKSPACE/generate_notes.py"
+
+      - name: "🚀 Publish Official GitHub Release"
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "BMW-Edition-Build-${{ github.run_number }}"
+          name: "EXTREME++ BMW Edition - Official Stable (Build #${{ github.run_number }})"
+          body_path: release_notes.md
+          files: |
+            kernel/EXTREME++*.zip
+            release_assets/EKM-*.apk
+          draft: false
+          prerelease: false
 
       - name: "📢 Telegram: Official Release Broadcast"
         if: success()
@@ -188,17 +512,8 @@ jobs:
             ROOT_DESC="🚀 <b>Root Variants:</b> All 3 (KowSU + SuSFS v2.3.0, KowSU Standard KSU, Pure Clean)"
           fi
 
-          MSG="🔥 <b>EXTREME++ BMW Edition [BETA] Release #${{ github.run_number }}</b>%0A%0A"
-          MSG="${MSG}📱 <b>Device:</b> POCO F4 (munch)%0A"
-          MSG="${MSG}🏎️ <b>Edition:</b> EXTREME++ Gaming (BMW Edition [BETA])%0A"
-          MSG="${MSG}🛠️ <b>Toolchain:</b> ZyC-Clang 16.0.6 + LLD%0A"
-          MSG="${MSG}👑 <b>Author:</b> Extreme++ by @pandey_ji_8%0A"
-          MSG="${MSG}${ROOT_DESC}%0A%0A"
-          MSG="${MSG}✨ <b>Dynamic In-Kernel Profiles (/sys/kernel/extreme_profile):</b>%0A"
-          MSG="${MSG}• 🚀 <b>Gaming [0]:</b> 3.19GHz Prime Monster + 2.42GHz Gold (Peak 120 FPS)%0A"
-          MSG="${MSG}• ⚖️ <b>Balanced [1]:</b> 2.84GHz Prime Sweet-Spot + 2.25GHz Gold (Zero Heat 90 FPS)%0A"
-          MSG="${MSG}• 🔋 <b>Battery [2]:</b> 2.42GHz Prime Marathon + 1.96GHz Gold (All-Day SOT)%0A%0A"
-          MSG="${MSG}📦 <i>Uploading flashable ZIP packages below...</i>"
+          MSG=$(printf '🔥 <b>EXTREME++ BMW Edition [Official Stable] Release #%s</b>\n\n📱 <b>Device:</b> POCO F4 (munch)\n🏎️ <b>Edition:</b> EXTREME++ Gaming (BMW Edition)\n🛠️ <b>Toolchain:</b> ZyC-Clang 16.0.6 + LLD\n👑 <b>Author:</b> Extreme++ by @pandey_ji_8\n%s\n\n✨ <b>Dynamic In-Kernel Profiles (/sys/kernel/extreme_profile):</b>\n• 🚀 <b>Gaming [0]:</b> 3.19GHz Prime Monster + 2.42GHz Gold (Peak 120 FPS)\n• ⚖️ <b>Balanced [1]:</b> 2.84GHz Prime Sweet-Spot + 2.25GHz Gold (Zero Heat 90 FPS)\n• 🔋 <b>Battery [2]:</b> 2.42GHz Prime Marathon + 1.96GHz Gold (All-Day SOT)\n\n📦 <i>Uploading flashable ZIP packages and EKM Companion App below...</i>' \
+            "${{ github.run_number }}" "${ROOT_DESC}")
 
           TARGETS=()
           [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_CHAT_ID }}")
@@ -206,9 +521,9 @@ jobs:
 
           for chat in "${TARGETS[@]}"; do
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id="$chat" \
-              -d text="$MSG" \
-              -d parse_mode="HTML" || true
+              --data-urlencode "chat_id=$chat" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "text=$MSG" || true
           done
 
           for z in $(find "$GITHUB_WORKSPACE/kernel" -maxdepth 1 -name "EXTREME++*.zip" | sort); do
@@ -234,46 +549,34 @@ jobs:
               VARIANT_TAG=""
             fi
 
-            ZIP_CAPTION="📦 <b>${BNAME}</b>%0A${TARGET_TAG}%0A${VARIANT_TAG}%0A👑 Extreme++ BMW Edition by @pandey_ji_8"
+            if [ -n "${VARIANT_TAG}" ]; then
+              ZIP_CAPTION=$(printf '📦 <b>%s</b>\n%s\n%s\n👑 Extreme++ BMW Edition by @pandey_ji_8' "${BNAME}" "${TARGET_TAG}" "${VARIANT_TAG}")
+            else
+              ZIP_CAPTION=$(printf '📦 <b>%s</b>\n%s\n👑 Extreme++ BMW Edition by @pandey_ji_8' "${BNAME}" "${TARGET_TAG}")
+            fi
+
             for chat in "${TARGETS[@]}"; do
               curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-                -F chat_id="$chat" \
-                -F document=@"$z" \
-                -F caption="$ZIP_CAPTION" \
-                -F parse_mode="HTML" || true
+                -F "chat_id=$chat" \
+                -F "document=@$z" \
+                -F "caption=$ZIP_CAPTION" \
+                -F "parse_mode=HTML" || true
             done
           done
 
-      - name: "🔒 Telegram: Send Raw Images to Developer DM (Private)"
-        if: success()
-        run: |
-          DM_ID="${{ secrets.TELEGRAM_DM_ID }}"
-          if [ -z "$DM_ID" ]; then
-            echo "ℹ️ TELEGRAM_DM_ID secret is not set. Skipping private DM upload."
-            exit 0
-          fi
-
-          ZIP_PATH="${{ env.RAW_IMAGES_ZIP_PATH }}"
-          if [ -z "$ZIP_PATH" ] || [ ! -f "$ZIP_PATH" ]; then
-            echo "ℹ️ HyperOS raw images ZIP not present (either only AOSP was built or packaging skipped). Skipping DM upload."
-            exit 0
-          fi
-
-          DM_CAPTION="🛠️ <b>EXTREME++ HyperOS 4 / HyperOS Raw Images Developer Pack</b>%0A%0A"
-          DM_CAPTION="${DM_CAPTION}📱 <b>Device:</b> POCO F4 (munch)%0A"
-          DM_CAPTION="${DM_CAPTION}🏎️ <b>Edition:</b> BMW Edition (Build #${{ github.run_number }})%0A"
-          DM_CAPTION="${DM_CAPTION}⚡ <b>Target ROM:</b> HyperOS 4 / HyperOS (Android 13–17)%0A"
-          DM_CAPTION="${DM_CAPTION}📦 <b>Archive:</b> <code>${{ env.RAW_IMAGES_ZIP_NAME }}</code>%0A"
-          DM_CAPTION="${DM_CAPTION}📁 <b>Contents:</b> Raw <code>Image</code>, <code>dtb</code>, <code>dtbo.img</code>%0A%0A"
-          DM_CAPTION="${DM_CAPTION}🔒 <i>Privately delivered to your DM for testing and fastboot ROM integration (AOSP is excluded).</i>"
-
-          echo "[*] Sending HyperOS raw images ZIP exclusively to Telegram DM ($DM_ID)..."
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-            -F chat_id="$DM_ID" \
-            -F document=@"$ZIP_PATH" \
-            -F caption="$DM_CAPTION" \
-            -F parse_mode="HTML" || true
-          echo "✅ HyperOS raw kernel images package successfully dispatched to private DM!"
+          # Also upload EKM Companion App APK to Telegram!
+          for apk in $(find "$GITHUB_WORKSPACE/release_assets" -name "EKM-*.apk" 2>/dev/null); do
+            echo "Uploading EKM APK $apk to Telegram..."
+            ANAME=$(basename "$apk")
+            APK_CAPTION=$(printf '📱 <b>%s</b>\n🏎️ Extreme Kernel Manager (EKM) Official Companion App\n🎛️ Live In-Kernel Profile Switcher (Gaming / Balanced / Battery)\n🌙 POCO F4 Munch AMOLED DC Dimming + QS Tile\n👑 Extreme++ BMW Edition by @pandey_ji_8' "${ANAME}")
+            for chat in "${TARGETS[@]}"; do
+              curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
+                -F "chat_id=$chat" \
+                -F "document=@$apk" \
+                -F "caption=$APK_CAPTION" \
+                -F "parse_mode=HTML" || true
+            done
+          done
 
       - name: "📢 Telegram: Build Failed"
         if: failure()
@@ -282,9 +585,10 @@ jobs:
           [ -n "${{ secrets.TELEGRAM_CHAT_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_CHAT_ID }}")
           [ -n "${{ secrets.TELEGRAM_DM_ID }}" ] && TARGETS+=("${{ secrets.TELEGRAM_DM_ID }}")
 
+          FAIL_MSG=$(printf '❌ <b>EXTREME++ Build #%s FAILED!</b>\nPlease check GitHub Actions workflow logs.' "${{ github.run_number }}")
           for chat in "${TARGETS[@]}"; do
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage" \
-              -d chat_id="$chat" \
-              -d text="❌ <b>EXTREME++ Build #${{ github.run_number }} FAILED!</b>%0APlease check GitHub Actions workflow logs." \
-              -d parse_mode="HTML" || true
+              --data-urlencode "chat_id=$chat" \
+              --data-urlencode "parse_mode=HTML" \
+              --data-urlencode "text=$FAIL_MSG" || true
           done
